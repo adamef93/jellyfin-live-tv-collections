@@ -1,0 +1,359 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using Jellyfin.Data.Enums;
+using Jellyfin.Plugin.LiveTvChannelGroups.Configuration;
+using MediaBrowser.Controller.Collections;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.LiveTv;
+using Microsoft.Extensions.Logging;
+
+namespace Jellyfin.Plugin.LiveTvChannelGroups.Engine;
+
+/// <summary>
+/// Matches Live TV channels against the configured keyword rules and applies
+/// the result as Tags and, optionally, Collections.
+/// </summary>
+public class ChannelGroupEngine
+{
+    private readonly ILibraryManager _libraryManager;
+    private readonly ICollectionManager _collectionManager;
+    private readonly ILogger<ChannelGroupEngine> _logger;
+    private readonly SemaphoreSlim _applyLock = new(1, 1);
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ChannelGroupEngine"/> class.
+    /// </summary>
+    /// <param name="libraryManager">The library manager.</param>
+    /// <param name="collectionManager">The collection manager.</param>
+    /// <param name="logger">The logger.</param>
+    public ChannelGroupEngine(
+        ILibraryManager libraryManager,
+        ICollectionManager collectionManager,
+        ILogger<ChannelGroupEngine> logger)
+    {
+        _libraryManager = libraryManager;
+        _collectionManager = collectionManager;
+        _logger = logger;
+    }
+
+    private static PluginConfiguration Config => Plugin.Instance!.Configuration;
+
+    /// <summary>
+    /// Fetches every Live TV channel currently known to the library.
+    /// </summary>
+    /// <returns>All Live TV channel items.</returns>
+    public IReadOnlyList<LiveTvChannel> GetAllChannels()
+    {
+        var query = new InternalItemsQuery
+        {
+            IncludeItemTypes = new[] { BaseItemKind.LiveTvChannel }
+        };
+
+        return _libraryManager.GetItemList(query).OfType<LiveTvChannel>().ToList();
+    }
+
+    /// <summary>
+    /// Tests whether a channel's name matches a rule's keywords.
+    /// </summary>
+    /// <param name="channel">The channel to test.</param>
+    /// <param name="rule">The rule to test against.</param>
+    /// <returns><c>true</c> if the channel matches.</returns>
+    public static bool IsMatch(LiveTvChannel channel, ChannelGroupRule rule)
+    {
+        if (!rule.Enabled || string.IsNullOrWhiteSpace(rule.Keywords))
+        {
+            return false;
+        }
+
+        var name = channel.Name ?? string.Empty;
+        var comparison = rule.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var regexOptions = rule.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
+
+        var keywords = rule.Keywords
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var keyword in keywords)
+        {
+            if (keyword.Length == 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                switch (rule.MatchMode)
+                {
+                    case MatchMode.Contains:
+                        if (name.Contains(keyword, comparison))
+                        {
+                            return true;
+                        }
+
+                        break;
+                    case MatchMode.WholeWord:
+                        var wholeWordPattern = $@"\b{Regex.Escape(keyword)}\b";
+                        if (Regex.IsMatch(name, wholeWordPattern, regexOptions))
+                        {
+                            return true;
+                        }
+
+                        break;
+                    case MatchMode.Regex:
+                        if (Regex.IsMatch(name, keyword, regexOptions))
+                        {
+                            return true;
+                        }
+
+                        break;
+                }
+            }
+            catch (RegexParseException)
+            {
+                // Invalid pattern typed into the config page: skip this keyword
+                // rather than failing the whole apply pass.
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Computes, for each rule, which of the given channels currently match,
+    /// without changing anything. Used by the config page's "Preview" button
+    /// and the API's preview endpoint.
+    /// </summary>
+    /// <param name="channels">The channels to test.</param>
+    /// <param name="rules">The rules to test.</param>
+    /// <returns>A map of rule id to the list of matching channels.</returns>
+    public static IReadOnlyDictionary<string, List<LiveTvChannel>> PreviewMatches(
+        IReadOnlyList<LiveTvChannel> channels,
+        IReadOnlyList<ChannelGroupRule> rules)
+    {
+        var result = new Dictionary<string, List<LiveTvChannel>>();
+
+        foreach (var rule in rules)
+        {
+            result[rule.Id] = channels.Where(c => IsMatch(c, rule)).ToList();
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Runs a full apply pass: tags matching channels, retracts stale
+    /// plugin-managed tags, and (if enabled) syncs each group's Collection.
+    /// Only one pass runs at a time; concurrent callers wait for the running
+    /// pass to finish rather than running a second pass in parallel.
+    /// </summary>
+    /// <param name="progress">Optional progress reporter, 0-100.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A summary of what changed.</returns>
+    public async Task<ApplyResult> ApplyAsync(IProgress<double>? progress, CancellationToken cancellationToken)
+    {
+        await _applyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await ApplyInternalAsync(progress, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _applyLock.Release();
+        }
+    }
+
+    private async Task<ApplyResult> ApplyInternalAsync(IProgress<double>? progress, CancellationToken cancellationToken)
+    {
+        var config = Config;
+        var rules = config.Groups.Where(r => r.Enabled && !string.IsNullOrWhiteSpace(r.Name)).ToList();
+        var channels = GetAllChannels();
+        var state = LoadState();
+        var newState = new PluginState();
+        var result = new ApplyResult
+        {
+            GroupsProcessed = rules.Count,
+            ChannelsScanned = channels.Count
+        };
+
+        var groupChannelIds = rules.ToDictionary(r => r.Id, _ => new List<Guid>());
+        var total = Math.Max(channels.Count, 1);
+        var processed = 0;
+
+        foreach (var channel in channels)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var matchedGroupNames = new List<string>();
+            foreach (var rule in rules)
+            {
+                if (IsMatch(channel, rule))
+                {
+                    matchedGroupNames.Add(rule.Name);
+                    groupChannelIds[rule.Id].Add(channel.Id);
+                }
+            }
+
+            var channelKey = channel.Id.ToString("N");
+            var previouslyAppliedTags = state.ChannelTags.TryGetValue(channelKey, out var pt)
+                ? pt
+                : Array.Empty<string>();
+            var currentTags = (channel.Tags ?? Array.Empty<string>()).ToList();
+            var changed = false;
+
+            foreach (var groupName in matchedGroupNames)
+            {
+                if (!currentTags.Contains(groupName, StringComparer.OrdinalIgnoreCase))
+                {
+                    currentTags.Add(groupName);
+                    changed = true;
+                }
+            }
+
+            if (config.RemoveStaleTags)
+            {
+                foreach (var oldTag in previouslyAppliedTags)
+                {
+                    var stillMatches = matchedGroupNames.Contains(oldTag, StringComparer.OrdinalIgnoreCase);
+                    if (!stillMatches && currentTags.Contains(oldTag, StringComparer.OrdinalIgnoreCase))
+                    {
+                        currentTags.RemoveAll(t => string.Equals(t, oldTag, StringComparison.OrdinalIgnoreCase));
+                        changed = true;
+                    }
+                }
+            }
+
+            if (changed)
+            {
+                channel.Tags = currentTags.ToArray();
+                await _libraryManager
+                    .UpdateItemAsync(channel, channel.GetParent(), ItemUpdateType.MetadataEdit, cancellationToken)
+                    .ConfigureAwait(false);
+                result.ChannelsUpdated++;
+            }
+
+            if (matchedGroupNames.Count > 0)
+            {
+                newState.ChannelTags[channelKey] = matchedGroupNames.ToArray();
+            }
+
+            processed++;
+            progress?.Report(processed * 100.0 / total);
+        }
+
+        SaveState(newState);
+
+        if (config.CreateCollections)
+        {
+            foreach (var rule in rules)
+            {
+                var synced = await SyncCollectionAsync(rule, groupChannelIds[rule.Id], cancellationToken)
+                    .ConfigureAwait(false);
+                if (synced)
+                {
+                    result.CollectionsSynced++;
+                }
+            }
+
+            Plugin.Instance!.SaveConfiguration();
+        }
+
+        return result;
+    }
+
+    private async Task<bool> SyncCollectionAsync(ChannelGroupRule rule, List<Guid> matchedIds, CancellationToken cancellationToken)
+    {
+        BoxSet? boxSet = null;
+        if (rule.CollectionId != Guid.Empty)
+        {
+            boxSet = _libraryManager.GetItemById(rule.CollectionId) as BoxSet;
+        }
+
+        if (boxSet is null)
+        {
+            if (matchedIds.Count == 0)
+            {
+                // Nothing matches yet; don't create an empty collection.
+                return false;
+            }
+
+            _logger.LogInformation("Creating collection for Live TV channel group '{Name}'", rule.Name);
+
+            boxSet = await _collectionManager.CreateCollectionAsync(new CollectionCreationOptions
+            {
+                Name = rule.Name,
+                IsLocked = false,
+                ItemIdList = matchedIds.Select(i => i.ToString("N")).ToList()
+            }).ConfigureAwait(false);
+
+            rule.CollectionId = boxSet.Id;
+            return true;
+        }
+
+        var existingChildIds = (boxSet.LinkedChildren ?? Array.Empty<LinkedChild>())
+            .Select(c => c.ItemId ?? Guid.Empty)
+            .Where(g => g != Guid.Empty)
+            .ToHashSet();
+
+        var toAdd = matchedIds.Where(id => !existingChildIds.Contains(id)).ToList();
+        var toRemove = existingChildIds.Where(id => !matchedIds.Contains(id)).ToList();
+
+        if (toAdd.Count == 0 && toRemove.Count == 0)
+        {
+            return false;
+        }
+
+        if (toAdd.Count > 0)
+        {
+            await _collectionManager.AddToCollectionAsync(boxSet.Id, toAdd).ConfigureAwait(false);
+        }
+
+        if (toRemove.Count > 0)
+        {
+            await _collectionManager.RemoveFromCollectionAsync(boxSet.Id, toRemove).ConfigureAwait(false);
+        }
+
+        return true;
+    }
+
+    private string StatePath => Path.Combine(Plugin.Instance!.DataFolderPath, "state.json");
+
+    private PluginState LoadState()
+    {
+        try
+        {
+            if (!File.Exists(StatePath))
+            {
+                return new PluginState();
+            }
+
+            var json = File.ReadAllText(StatePath);
+            return JsonSerializer.Deserialize<PluginState>(json) ?? new PluginState();
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not read Live TV Channel Groups state file, starting fresh");
+            return new PluginState();
+        }
+    }
+
+    private void SaveState(PluginState state)
+    {
+        try
+        {
+            Directory.CreateDirectory(Plugin.Instance!.DataFolderPath);
+            var json = JsonSerializer.Serialize(state);
+            File.WriteAllText(StatePath, json);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not write Live TV Channel Groups state file");
+        }
+    }
+}

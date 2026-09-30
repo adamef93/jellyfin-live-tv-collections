@@ -1,0 +1,22 @@
+---
+name: "Live TV Channel Groups"
+guid: "37fb33f3-2692-4c45-a4f6-f7e0279b1a5e"
+version: "1.0.0.0"
+targetAbi: "10.11.0.0"
+framework: "net9.0"
+overview: "Group Live TV channels by keyword (Hockey, NFL, News, ...)"
+description: >
+  Define named groups with keyword rules (e.g. "Hockey" -> hockey, nhl, sportsnet;
+  "NFL" -> nfl, football, redzone). The plugin tags every matching Live TV channel
+  with the group name and, optionally, keeps a matching Collection in sync so the
+  group is browsable from any Jellyfin client, including third-party apps such as
+  Moonfin. Runs automatically when channels are added/updated and on a schedule,
+  and can also be triggered on demand from its own REST API.
+category: "Live TV"
+owner: "adamef93"
+artifacts:
+- "Jellyfin.Plugin.LiveTvChannelGroups.dll"
+changelog: >
+  1.0.0.0 - Initial release: keyword-based channel tagging, optional Collection
+  sync, scheduled task, live auto-apply on channel add/update, and a small REST
+  API for previewing matches and triggering a re-apply.

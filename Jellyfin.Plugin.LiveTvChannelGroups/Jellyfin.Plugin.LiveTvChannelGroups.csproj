@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Targets the same package/ABI pair as the current official Jellyfin plugin
+    template (jellyfin/jellyfin-plugin-template) as of this writing. Jellyfin's
+    product/marketing version jumped straight from 10.11 to 12.0, but the plugin
+    ABI and the published Jellyfin.Controller / Jellyfin.Model NuGet packages are
+    still versioned under the 10.11.x line, and 10.11-ABI plugins load fine on a
+    12.0 server. If your server's dashboard reports this plugin as unsupported,
+    bump JellyfinVersion below (and build.yaml's targetAbi) to match what your
+    server actually reports, and switch TargetFramework to net10.0 if your server
+    needs that.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.LiveTvChannelGroups</RootNamespace>
+    <AssemblyName>Jellyfin.Plugin.LiveTvChannelGroups</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>CS1591</NoWarn>
+    <JellyfinVersion Condition="'$(JellyfinVersion)' == ''">10.11.5</JellyfinVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Needed for ControllerBase / [ApiController] / authorization policies used by Api\ChannelGroupsController.cs -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+
+    <!-- Compile-only: the host's own copies load at runtime, only the plugin DLL ships. -->
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinVersion)">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Configuration\configPage.html" />
+    <EmbeddedResource Include="Configuration\configPage.html" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Guards against macOS AppleDouble sidecar files (._*.cs) that some
+         zip/sync tools leave behind; MSBuild's default glob would otherwise
+         try to compile them and fail with CS2015. -->
+    <Compile Remove="**/._*" />
+  </ItemGroup>
+
+</Project>

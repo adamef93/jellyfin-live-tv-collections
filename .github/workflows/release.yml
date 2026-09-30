@@ -1,0 +1,83 @@
+name: Release
+
+# Push a tag like v1.0.1 to build the plugin, attach the zip to a GitHub
+# Release, and add that version to manifest.json on main (the file Jellyfin
+# reads as a plugin repository). The annotated tag's message becomes the
+# changelog shown in Jellyfin's catalog.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Work out version, ABI and changelog
+        id: meta
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Jellyfin plugin versions are four-part (1.2.3.0)
+          while [ "$(printf '%s' "$version" | tr -cd . | wc -c)" -lt 3 ]; do version="$version.0"; done
+          target_abi=$(sed -n 's/^targetAbi: *"\(.*\)"/\1/p' build.yaml)
+
+          # actions/checkout can leave the tag without its annotation; refetch it.
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | sed '/-----BEGIN PGP SIGNATURE-----/,$d' > changelog.txt
+          if [ ! -s changelog.txt ] || [ "$(git cat-file -t "$GITHUB_REF_NAME")" != "tag" ]; then
+            echo "Release $version" > changelog.txt
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "target_abi=$target_abi" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: >
+          dotnet publish Jellyfin.Plugin.LiveTvChannelGroups/Jellyfin.Plugin.LiveTvChannelGroups.csproj
+          -c Release -o publish
+          -p:Version=${{ steps.meta.outputs.version }}
+          -p:AssemblyVersion=${{ steps.meta.outputs.version }}
+          -p:FileVersion=${{ steps.meta.outputs.version }}
+
+      - name: Package
+        id: package
+        run: |
+          zip_name="live-tv-channel-groups_${{ steps.meta.outputs.version }}.zip"
+          (cd publish && zip "../$zip_name" Jellyfin.Plugin.LiveTvChannelGroups.dll)
+          echo "zip=$zip_name" >> "$GITHUB_OUTPUT"
+          echo "checksum=$(md5sum "$zip_name" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.meta.outputs.version }}
+          body_path: changelog.txt
+          files: ${{ steps.package.outputs.zip }}
+
+      - name: Add version to manifest.json on main
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TARGET_ABI: ${{ steps.meta.outputs.target_abi }}
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.package.outputs.zip }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          export CHANGELOG="$(cat changelog.txt)"
+          git fetch origin main
+          git checkout -B main origin/main
+          python3 .github/scripts/update_manifest.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "Add $VERSION to manifest.json"
+          git push origin main
