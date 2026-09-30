@@ -15,9 +15,12 @@ a Collection of the same name that you can browse from any Jellyfin client.
   match.
 - **Flexible matching** — case-insensitive substring match by default, with
   whole-word and regular-expression modes available per group.
+- **Program matching** (optional, per group) — also match on the names of
+  upcoming guide programs, so a channel joins a group while it has a matching
+  show or game scheduled.
 - **Stays up to date automatically** — re-applies shortly after channels are
-  added or updated (e.g. after a tuner or M3U rescan), and every 6 hours as a
-  scheduled task.
+  added or updated (e.g. after a tuner or M3U rescan) or, for groups that match
+  programs, after a guide refresh, and every 6 hours as a scheduled task.
 - **Safe cleanup** — when a channel stops matching, only tags this plugin added
   are removed; tags you added yourself are never touched.
 - **REST API** — preview matches or trigger an apply from scripts.
@@ -40,8 +43,11 @@ Future releases appear as plugin updates like any official plugin.
 2. Add a group, e.g. Name `Hockey`, Keywords `hockey, nhl, sportsnet`.
 3. Click **Save**, then **Apply now** (or wait for the next automatic run).
 
-Keywords are matched against the channel **name** only — not channel numbers
-or guide/program data.
+Keywords are matched against the channel **name**. Tick **Also match program
+names in the guide** on a group to also match the titles of programs airing now
+or coming up within the lookahead window — e.g. an **NFL** group picks up CBS
+during the week before a Sunday game, then drops it again once the game is no
+longer in the guide window. Channel numbers are never matched.
 
 ### Settings
 
@@ -51,6 +57,7 @@ or guide/program data.
 | Remove stale tags when a rule's keywords change | On | Remove a group's tag from channels that no longer match it. |
 | Re-apply automatically when channels change | On | Re-apply when channels are added or updated. |
 | Debounce (seconds) | 15 | Wait this long after the last channel change before applying, so a large rescan triggers a single pass. |
+| Program lookahead (hours) | 168 | For groups that match program names, how far ahead in the guide to look. Programs airing now always count; `0` means only what is on right now. |
 
 Each group can also be set to **Contains**, **Whole word**, or **Regular expression**
 matching, made case-sensitive, or disabled without deleting it.

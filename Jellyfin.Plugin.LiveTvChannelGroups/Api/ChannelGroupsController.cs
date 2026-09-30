@@ -44,7 +44,8 @@ public class ChannelGroupsController : ControllerBase
     {
         var config = Plugin.Instance!.Configuration;
         var channels = _engine.GetAllChannels();
-        var matches = ChannelGroupEngine.PreviewMatches(channels, config.Groups);
+        var programNames = _engine.GetUpcomingProgramNames(config.Groups);
+        var matches = ChannelGroupEngine.PreviewMatches(channels, config.Groups, programNames);
 
         var result = config.Groups.Select(rule => new GroupPreview(
             rule.Id,

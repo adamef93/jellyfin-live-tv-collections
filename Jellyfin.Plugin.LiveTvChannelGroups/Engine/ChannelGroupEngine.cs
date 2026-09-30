@@ -61,19 +61,63 @@ public class ChannelGroupEngine
     }
 
     /// <summary>
-    /// Tests whether a channel's name matches a rule's keywords.
+    /// Fetches the names of guide programs airing now or starting within the
+    /// configured lookahead window, grouped by channel id. Returns an empty
+    /// map without querying the guide when no enabled rule matches on programs.
+    /// </summary>
+    /// <param name="rules">The rules that will be evaluated.</param>
+    /// <returns>A map of channel id to the distinct program names on that channel.</returns>
+    public IReadOnlyDictionary<Guid, string[]> GetUpcomingProgramNames(IReadOnlyList<ChannelGroupRule> rules)
+    {
+        if (!rules.Any(r => r.Enabled && r.MatchPrograms))
+        {
+            return new Dictionary<Guid, string[]>();
+        }
+
+        var now = DateTime.UtcNow;
+        var query = new InternalItemsQuery
+        {
+            IncludeItemTypes = new[] { BaseItemKind.LiveTvProgram },
+            MinEndDate = now,
+            MaxStartDate = now.AddHours(Math.Max(0, Config.ProgramLookaheadHours))
+        };
+
+        return _libraryManager.GetItemList(query)
+            .OfType<LiveTvProgram>()
+            .Where(p => p.ChannelId != Guid.Empty && !string.IsNullOrWhiteSpace(p.Name))
+            .GroupBy(p => p.ChannelId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(p => p.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    /// <summary>
+    /// Tests whether a channel matches a rule's keywords, by channel name and,
+    /// if the rule asks for it, by the names of its upcoming programs.
     /// </summary>
     /// <param name="channel">The channel to test.</param>
     /// <param name="rule">The rule to test against.</param>
+    /// <param name="programNames">Upcoming program names by channel id, from <see cref="GetUpcomingProgramNames"/>.</param>
     /// <returns><c>true</c> if the channel matches.</returns>
-    public static bool IsMatch(LiveTvChannel channel, ChannelGroupRule rule)
+    public static bool IsMatch(LiveTvChannel channel, ChannelGroupRule rule, IReadOnlyDictionary<Guid, string[]> programNames)
     {
         if (!rule.Enabled || string.IsNullOrWhiteSpace(rule.Keywords))
         {
             return false;
         }
 
-        var name = channel.Name ?? string.Empty;
+        if (IsTextMatch(channel.Name ?? string.Empty, rule))
+        {
+            return true;
+        }
+
+        return rule.MatchPrograms
+            && programNames.TryGetValue(channel.Id, out var names)
+            && names.Any(n => IsTextMatch(n, rule));
+    }
+
+    private static bool IsTextMatch(string text, ChannelGroupRule rule)
+    {
         var comparison = rule.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var regexOptions = rule.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
 
@@ -92,7 +136,7 @@ public class ChannelGroupEngine
                 switch (rule.MatchMode)
                 {
                     case MatchMode.Contains:
-                        if (name.Contains(keyword, comparison))
+                        if (text.Contains(keyword, comparison))
                         {
                             return true;
                         }
@@ -100,14 +144,14 @@ public class ChannelGroupEngine
                         break;
                     case MatchMode.WholeWord:
                         var wholeWordPattern = $@"\b{Regex.Escape(keyword)}\b";
-                        if (Regex.IsMatch(name, wholeWordPattern, regexOptions))
+                        if (Regex.IsMatch(text, wholeWordPattern, regexOptions))
                         {
                             return true;
                         }
 
                         break;
                     case MatchMode.Regex:
-                        if (Regex.IsMatch(name, keyword, regexOptions))
+                        if (Regex.IsMatch(text, keyword, regexOptions))
                         {
                             return true;
                         }
@@ -132,16 +176,18 @@ public class ChannelGroupEngine
     /// </summary>
     /// <param name="channels">The channels to test.</param>
     /// <param name="rules">The rules to test.</param>
+    /// <param name="programNames">Upcoming program names by channel id, from <see cref="GetUpcomingProgramNames"/>.</param>
     /// <returns>A map of rule id to the list of matching channels.</returns>
     public static IReadOnlyDictionary<string, List<LiveTvChannel>> PreviewMatches(
         IReadOnlyList<LiveTvChannel> channels,
-        IReadOnlyList<ChannelGroupRule> rules)
+        IReadOnlyList<ChannelGroupRule> rules,
+        IReadOnlyDictionary<Guid, string[]> programNames)
     {
         var result = new Dictionary<string, List<LiveTvChannel>>();
 
         foreach (var rule in rules)
         {
-            result[rule.Id] = channels.Where(c => IsMatch(c, rule)).ToList();
+            result[rule.Id] = channels.Where(c => IsMatch(c, rule, programNames)).ToList();
         }
 
         return result;
@@ -174,6 +220,7 @@ public class ChannelGroupEngine
         var config = Config;
         var rules = config.Groups.Where(r => r.Enabled && !string.IsNullOrWhiteSpace(r.Name)).ToList();
         var channels = GetAllChannels();
+        var programNames = GetUpcomingProgramNames(rules);
         var state = LoadState();
         var newState = new PluginState();
         var result = new ApplyResult
@@ -193,7 +240,7 @@ public class ChannelGroupEngine
             var matchedGroupNames = new List<string>();
             foreach (var rule in rules)
             {
-                if (IsMatch(channel, rule))
+                if (IsMatch(channel, rule, programNames))
                 {
                     matchedGroupNames.Add(rule.Name);
                     groupChannelIds[rule.Id].Add(channel.Id);

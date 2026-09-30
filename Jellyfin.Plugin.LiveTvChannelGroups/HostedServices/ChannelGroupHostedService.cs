@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveTvChannelGroups.Engine;
@@ -11,8 +12,9 @@ namespace Jellyfin.Plugin.LiveTvChannelGroups.HostedServices;
 
 /// <summary>
 /// Watches for Live TV channels being added or updated (e.g. after a tuner or
-/// M3U rescan) and debounces a single apply pass shortly afterwards, instead
-/// of waiting for the next scheduled task run.
+/// M3U rescan), and for guide programs when any rule matches on program names,
+/// and debounces a single apply pass shortly afterwards, instead of waiting
+/// for the next scheduled task run.
 /// </summary>
 public sealed class ChannelGroupHostedService : IHostedService, IDisposable
 {
@@ -63,13 +65,20 @@ public sealed class ChannelGroupHostedService : IHostedService, IDisposable
 
     private void OnLiveTvChannelChanged(object? sender, ItemChangeEventArgs e)
     {
-        if (e.Item is not LiveTvChannel)
+        var config = Plugin.Instance?.Configuration;
+        if (config is null || !config.AutoApplyOnChannelChange)
         {
             return;
         }
 
-        var config = Plugin.Instance?.Configuration;
-        if (config is null || !config.AutoApplyOnChannelChange)
+        var relevant = e.Item switch
+        {
+            LiveTvChannel => true,
+            LiveTvProgram => config.Groups.Any(r => r.Enabled && r.MatchPrograms),
+            _ => false
+        };
+
+        if (!relevant)
         {
             return;
         }
@@ -87,7 +96,7 @@ public sealed class ChannelGroupHostedService : IHostedService, IDisposable
     {
         try
         {
-            _logger.LogInformation("Live TV channel list changed; re-applying channel groups");
+            _logger.LogInformation("Live TV channels or guide changed; re-applying channel groups");
             await _engine.ApplyAsync(progress: null, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)

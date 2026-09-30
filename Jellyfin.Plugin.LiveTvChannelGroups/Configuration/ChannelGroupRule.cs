@@ -53,6 +53,15 @@ public class ChannelGroupRule
     public bool CaseSensitive { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the keywords are also matched
+    /// against the names of programs in the guide, so a channel joins the group
+    /// while it is airing (or about to air) a matching program, e.g. CBS
+    /// during an NFL game. How far ahead to look is set by
+    /// <see cref="PluginConfiguration.ProgramLookaheadHours"/>.
+    /// </summary>
+    public bool MatchPrograms { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this rule is active.
     /// Disabled rules are skipped entirely and any tags/collection membership
     /// they previously created are left untouched (they are not retracted).

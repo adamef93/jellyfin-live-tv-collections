@@ -19,6 +19,7 @@ public class PluginConfiguration : BasePluginConfiguration
         RemoveStaleTags = true;
         AutoApplyOnChannelChange = true;
         DebounceSeconds = 15;
+        ProgramLookaheadHours = 168;
     }
 
     /// <summary>
@@ -60,4 +61,11 @@ public class PluginConfiguration : BasePluginConfiguration
     /// instead of re-scanning the whole channel list per event.
     /// </summary>
     public int DebounceSeconds { get; set; }
+
+    /// <summary>
+    /// Gets or sets how far ahead, in hours, to look in the guide when a rule
+    /// matches on program names. Programs currently airing always count; a
+    /// program further out than this is ignored until it comes into range.
+    /// </summary>
+    public int ProgramLookaheadHours { get; set; }
 }
