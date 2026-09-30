@@ -3,6 +3,14 @@
     "guid": "37fb33f3-2692-4c45-a4f6-f7e0279b1a5e",
     "versions": [
       {
+        "version": "1.1.0.0",
+        "changelog": "Groups can optionally match upcoming guide program names as well as channel names, with a configurable lookahead window (default 168 hours).",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/adamef93/jellyfin-live-tv-collections/releases/download/v1.1.0/live-tv-channel-groups_1.1.0.0.zip",
+        "checksum": "7632013a4d4c14b174b6d06f303898b4",
+        "timestamp": "2026-09-30T19:33:28Z"
+      },
+      {
         "version": "1.0.0.0",
         "changelog": "Initial release: keyword-based channel tagging, optional Collection sync, scheduled task, live auto-apply on channel add/update, and a small REST API for previewing matches and triggering a re-apply.",
         "targetAbi": "10.11.0.0",
