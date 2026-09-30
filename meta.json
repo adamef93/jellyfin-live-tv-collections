@@ -5,9 +5,9 @@
   "description": "Group Live TV channels by keyword (e.g. Hockey, NFL, News) as Tags and, optionally, Collections.",
   "overview": "Group Live TV channels by keyword",
   "owner": "adamef93",
-  "version": "1.0.0.0",
+  "version": "1.1.0.0",
   "targetAbi": "10.11.0.0",
   "status": "Active",
   "autoUpdate": false,
-  "changelog": "1.0.0.0 - Initial release: keyword-based channel tagging, optional Collection sync, scheduled task, live auto-apply, and a small REST API."
+  "changelog": "1.1.0.0 - Groups can optionally match upcoming guide program names as well as channel names, with a configurable lookahead window (default 168 hours)."
 }
