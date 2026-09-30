@@ -1,1 +1,20 @@
-[]
+[
+  {
+    "guid": "37fb33f3-2692-4c45-a4f6-f7e0279b1a5e",
+    "versions": [
+      {
+        "version": "1.0.0.0",
+        "changelog": "Initial release: keyword-based channel tagging, optional Collection sync, scheduled task, live auto-apply on channel add/update, and a small REST API for previewing matches and triggering a re-apply.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/adamef93/jellyfin-live-tv-collections/releases/download/v1.0.0/live-tv-channel-groups_1.0.0.0.zip",
+        "checksum": "2044c05277f9ed3c3099cc805bd1b275",
+        "timestamp": "2026-09-30T15:52:01Z"
+      }
+    ],
+    "name": "Live TV Channel Groups",
+    "description": "Group Live TV channels by keyword (e.g. Hockey, NFL, News) as Tags and, optionally, Collections.",
+    "overview": "Group Live TV channels by keyword",
+    "owner": "adamef93",
+    "category": "Live TV"
+  }
+]
