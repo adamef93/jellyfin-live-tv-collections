@@ -145,6 +145,12 @@
             // innerHTML are not guaranteed to be upgraded (or, if upgrade throws, can
             // abort the surrounding script silently). Plain elements always work and
             // still submit/read like normal form fields, just without the themed look.
+            function updateLookaheadLabels(page) {
+                var hours = parseInt(page.querySelector("#txtProgramLookaheadHours").value, 10);
+                var text = String(isNaN(hours) ? 168 : Math.max(0, hours));
+                page.querySelectorAll(".lblLookaheadHours").forEach(function (el) { el.textContent = text; });
+            }
+
             function renderGroups(page, groups) {
                 var container = page.querySelector("#groupsContainer");
                 if (!container) {
@@ -193,7 +199,7 @@
                         '</label>' +
                         '<label class="checkboxContainer">' +
                         '  <input type="checkbox" class="fldMatchPrograms" ' + (group.MatchPrograms ? "checked" : "") + ' />' +
-                        '  <span>Also match program names in the guide (e.g. CBS while it has an NFL game coming up)</span>' +
+                        '  <span>Also match channels with upcoming games or programs matching these keywords (looks ahead <span class="lblLookaheadHours">168</span> hours; change under Program lookahead in settings above)</span>' +
                         '</label>' +
                         '<button type="button" class="raised button-alt btnPreviewGroup"><span>Preview matches</span></button> ' +
                         '<button type="button" class="raised button-alt btnRemoveGroup"><span>Remove group</span></button>' +
@@ -314,6 +320,7 @@
                     page.querySelector("#txtProgramLookaheadHours").value =
                         config.ProgramLookaheadHours == null ? 168 : config.ProgramLookaheadHours;
                     renderGroups(page, config.Groups || []);
+                    updateLookaheadLabels(page);
                     setStatus("JS running. Configuration loaded (" + (config.Groups || []).length + " groups).");
                     if (typeof Dashboard !== "undefined") { Dashboard.hideLoadingMsg(); }
                 }).catch(function (err) {
@@ -327,6 +334,9 @@
             // which may not fire in newer clients. Also reload on pageshow if it does.
             loadConfig();
             page.addEventListener("pageshow", loadConfig);
+            page.querySelector("#txtProgramLookaheadHours").addEventListener("input", function () {
+                updateLookaheadLabels(page);
+            });
 
             page.querySelector("#btnAddGroup").addEventListener("click", function (e) {
                 e.preventDefault();
@@ -334,6 +344,7 @@
                     var current = readGroupsFromForm(page);
                     current.push(emptyGroup());
                     renderGroups(page, current);
+                    updateLookaheadLabels(page);
                 } catch (err) {
                     console.error("LiveTvChannelGroups: add group failed", err);
                     setStatus("Could not add group: " + err.message);
