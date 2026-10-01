@@ -7,8 +7,8 @@
         "changelog": "v1.2.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/adamef93/jellyfin-live-tv-collections/releases/download/v1.2.0/live-tv-channel-groups_1.2.0.0.zip",
-        "checksum": "c69db022736f88ed334b4ef6a0583a5f",
-        "timestamp": "2026-10-01T14:25:09Z"
+        "checksum": "4e5d6f7fae5c4eaca84de31cc0ec0761",
+        "timestamp": "2026-10-01T14:25:12Z"
       },
       {
         "version": "1.1.0.0",
