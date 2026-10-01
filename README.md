@@ -57,7 +57,7 @@ longer in the guide window. Channel numbers are never matched.
 | Remove stale tags when a rule's keywords change | On | Remove a group's tag from channels that no longer match it. |
 | Re-apply automatically when channels change | On | Re-apply when channels are added or updated. |
 | Debounce (seconds) | 15 | Wait this long after the last channel change before applying, so a large rescan triggers a single pass. |
-| Program lookahead (hours) | 168 | For groups that match program names, how far ahead in the guide to look. Programs airing now always count; `0` means only what is on right now. |
+| Program lookahead (days) | 7 | For groups that match program names, how far ahead in the guide to look. Programs airing now always count; `0` means only what is on right now. |
 
 Each group can also be set to **Contains**, **Whole word**, or **Regular expression**
 matching, made case-sensitive, or disabled without deleting it.

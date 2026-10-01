@@ -57,7 +57,7 @@ public class ChannelGroupRule
     /// against the names of programs in the guide, so a channel joins the group
     /// while it is airing (or about to air) a matching program, e.g. CBS
     /// during an NFL game. How far ahead to look is set by
-    /// <see cref="PluginConfiguration.ProgramLookaheadHours"/>.
+    /// <see cref="PluginConfiguration.ProgramLookaheadDays"/>.
     /// </summary>
     public bool MatchPrograms { get; set; }
 

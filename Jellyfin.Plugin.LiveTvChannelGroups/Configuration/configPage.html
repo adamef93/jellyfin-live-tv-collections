@@ -74,8 +74,8 @@
                             <div class="fieldDescription">How long to wait after the last channel change before re-applying.</div>
                         </div>
                         <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="txtProgramLookaheadHours">Program lookahead (hours)</label>
-                            <input id="txtProgramLookaheadHours" type="number" is="emby-input" min="0" max="720" />
+                            <label class="inputLabel inputLabelUnfocused" for="txtProgramLookaheadHours">Program lookahead (days)</label>
+                            <input id="txtProgramLookaheadHours" type="number" is="emby-input" min="0" max="30" />
                             <div class="fieldDescription">For groups that match program names: how far ahead in the guide to look. Programs airing now always count; 0 means only what is on right now.</div>
                         </div>
                     </div>
@@ -146,9 +146,11 @@
             // abort the surrounding script silently). Plain elements always work and
             // still submit/read like normal form fields, just without the themed look.
             function updateLookaheadLabels(page) {
-                var hours = parseInt(page.querySelector("#txtProgramLookaheadHours").value, 10);
-                var text = String(isNaN(hours) ? 168 : Math.max(0, hours));
-                page.querySelectorAll(".lblLookaheadHours").forEach(function (el) { el.textContent = text; });
+                var days = parseInt(page.querySelector("#txtProgramLookaheadHours").value, 10);
+                days = isNaN(days) ? 7 : Math.max(0, days);
+                page.querySelectorAll(".lblLookaheadDays").forEach(function (el) {
+                    el.textContent = days + (days === 1 ? " day" : " days");
+                });
             }
 
             function renderGroups(page, groups) {
@@ -199,7 +201,7 @@
                         '</label>' +
                         '<label class="checkboxContainer">' +
                         '  <input type="checkbox" class="fldMatchPrograms" ' + (group.MatchPrograms ? "checked" : "") + ' />' +
-                        '  <span>Also match channels with upcoming games or programs matching these keywords (looks ahead <span class="lblLookaheadHours">168</span> hours; change under Program lookahead in settings above)</span>' +
+                        '  <span>Also match channels with upcoming games or programs matching these keywords (looks ahead <span class="lblLookaheadDays">7 days</span>; change under Program lookahead in settings above)</span>' +
                         '</label>' +
                         '<button type="button" class="raised button-alt btnPreviewGroup"><span>Preview matches</span></button> ' +
                         '<button type="button" class="raised button-alt btnRemoveGroup"><span>Remove group</span></button>' +
@@ -318,7 +320,9 @@
                     page.querySelector("#chkAutoApply").checked = !!config.AutoApplyOnChannelChange;
                     page.querySelector("#txtDebounceSeconds").value = config.DebounceSeconds || 15;
                     page.querySelector("#txtProgramLookaheadHours").value =
-                        config.ProgramLookaheadHours == null ? 168 : config.ProgramLookaheadHours;
+                        config.ProgramLookaheadHours != null
+                            ? Math.ceil(config.ProgramLookaheadHours / 24)
+                            : (config.ProgramLookaheadDays == null ? 7 : config.ProgramLookaheadDays);
                     renderGroups(page, config.Groups || []);
                     updateLookaheadLabels(page);
                     setStatus("JS running. Configuration loaded (" + (config.Groups || []).length + " groups).");
@@ -379,7 +383,8 @@
                     config.AutoApplyOnChannelChange = page.querySelector("#chkAutoApply").checked;
                     config.DebounceSeconds = parseInt(page.querySelector("#txtDebounceSeconds").value, 10) || 15;
                     var lookahead = parseInt(page.querySelector("#txtProgramLookaheadHours").value, 10);
-                    config.ProgramLookaheadHours = isNaN(lookahead) ? 168 : Math.max(0, lookahead);
+                    config.ProgramLookaheadDays = isNaN(lookahead) ? 7 : Math.max(0, lookahead);
+                    config.ProgramLookaheadHours = null;
 
                     var existingById = {};
                     (config.Groups || []).forEach(function (g) { existingById[g.Id] = g; });

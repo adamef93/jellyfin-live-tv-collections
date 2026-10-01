@@ -19,7 +19,7 @@ public class PluginConfiguration : BasePluginConfiguration
         RemoveStaleTags = true;
         AutoApplyOnChannelChange = true;
         DebounceSeconds = 15;
-        ProgramLookaheadHours = 168;
+        ProgramLookaheadDays = 7;
     }
 
     /// <summary>
@@ -63,9 +63,26 @@ public class PluginConfiguration : BasePluginConfiguration
     public int DebounceSeconds { get; set; }
 
     /// <summary>
-    /// Gets or sets how far ahead, in hours, to look in the guide when a rule
+    /// Gets or sets how far ahead, in days, to look in the guide when a rule
     /// matches on program names. Programs currently airing always count; a
     /// program further out than this is ignored until it comes into range.
     /// </summary>
-    public int ProgramLookaheadHours { get; set; }
+    public int ProgramLookaheadDays { get; set; }
+
+    /// <summary>
+    /// Gets or sets the lookahead in hours from versions before 1.2.1. Only
+    /// present in configs saved by those versions; the settings page clears it
+    /// the next time it saves.
+    /// </summary>
+    public int? ProgramLookaheadHours { get; set; }
+
+    /// <summary>
+    /// Gets the effective lookahead in days, converting a legacy hours value
+    /// (rounded up) when one is still stored.
+    /// </summary>
+    /// <returns>The lookahead window in days.</returns>
+    public int GetProgramLookaheadDays() =>
+        ProgramLookaheadHours.HasValue
+            ? (int)Math.Ceiling(Math.Max(0, ProgramLookaheadHours.Value) / 24.0)
+            : Math.Max(0, ProgramLookaheadDays);
 }

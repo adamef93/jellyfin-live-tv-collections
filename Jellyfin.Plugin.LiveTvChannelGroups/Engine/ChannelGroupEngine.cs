@@ -87,7 +87,7 @@ public class ChannelGroupEngine
         {
             IncludeItemTypes = new[] { BaseItemKind.LiveTvProgram },
             MinEndDate = now,
-            MaxStartDate = now.AddHours(Math.Max(0, Config.ProgramLookaheadHours))
+            MaxStartDate = now.AddDays(Config.GetProgramLookaheadDays())
         };
 
         return _libraryManager.GetItemList(query)
