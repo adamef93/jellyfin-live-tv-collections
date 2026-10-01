@@ -193,7 +193,13 @@
                         '  <input type="checkbox" class="fldMatchPrograms" ' + (group.MatchPrograms ? "checked" : "") + ' />' +
                         '  <span>Also match program names in the guide (e.g. CBS while it has an NFL game coming up)</span>' +
                         '</label>' +
-                        '<button type="button" class="raised button-alt btnRemoveGroup"><span>Remove group</span></button>';
+                        '<button type="button" class="raised button-alt btnPreviewGroup"><span>Preview matches</span></button> ' +
+                        '<button type="button" class="raised button-alt btnRemoveGroup"><span>Remove group</span></button>' +
+                        '<div class="groupPreview" style="margin-top:1em;"></div>';
+
+                    row.querySelector(".btnPreviewGroup").addEventListener("click", function () {
+                        previewGroup(row);
+                    });
 
                     row.querySelector(".btnRemoveGroup").addEventListener("click", function () {
                         row.remove();
@@ -203,20 +209,69 @@
                 });
             }
 
+            // Dry-runs the group as currently typed (no save needed) and lists which
+            // channels match, and which keyword hit which channel/program name.
+            function previewGroup(row) {
+                var out = row.querySelector(".groupPreview");
+                var group = readGroupRow(row);
+                out.textContent = "Checking...";
+                ApiClient.ajax({
+                    type: "POST",
+                    url: ApiClient.getUrl("LiveTvChannelGroups/Preview"),
+                    data: JSON.stringify(group),
+                    contentType: "application/json",
+                    dataType: "json"
+                }).then(function (result) {
+                    out.innerHTML = "";
+                    var head = document.createElement("p");
+                    head.style.fontWeight = "bold";
+                    head.textContent = result.Matches.length + " of " + result.ChannelsScanned + " channels match";
+                    out.appendChild(head);
+                    if (result.InvalidPatterns.length) {
+                        var warn = document.createElement("p");
+                        warn.style.color = "#f66";
+                        warn.textContent = "Invalid regular expression (skipped): " + result.InvalidPatterns.join(", ");
+                        out.appendChild(warn);
+                    }
+                    var list = document.createElement("div");
+                    list.style.maxHeight = "20em";
+                    list.style.overflowY = "auto";
+                    list.style.fontFamily = "monospace";
+                    list.style.fontSize = "0.9em";
+                    result.Matches.forEach(function (m) {
+                        var line = document.createElement("div");
+                        var label = (m.Number ? m.Number + " " : "") + m.Name;
+                        var why = m.MatchedOn === "program"
+                            ? ' \u2190 program "' + m.MatchedText + '"'
+                            : "";
+                        line.textContent = label + why + "   [" + m.Keyword + "]";
+                        list.appendChild(line);
+                    });
+                    out.appendChild(list);
+                }).catch(function (err) {
+                    console.error("LiveTvChannelGroups: preview failed", err);
+                    out.textContent = "Preview failed. Check the server log for details.";
+                });
+            }
+
+            function readGroupRow(row) {
+                return {
+                    Id: row.dataset.groupId,
+                    Name: row.querySelector(".fldName").value,
+                    Keywords: row.querySelector(".fldKeywords").value,
+                    MatchMode: row.querySelector(".fldMatchMode").value,
+                    CaseSensitive: row.querySelector(".fldCaseSensitive").checked,
+                    MatchPrograms: row.querySelector(".fldMatchPrograms").checked,
+                    Enabled: row.querySelector(".fldEnabled").checked,
+                    CollectionId: row.dataset.collectionId || "00000000-0000-0000-0000-000000000000"
+                };
+            }
+
             function readGroupsFromForm(page) {
                 var rows = page.querySelectorAll("#groupsContainer [data-group-id]");
                 var groups = [];
                 rows.forEach(function (row) {
-                    groups.push({
-                        Id: row.dataset.groupId,
-                        Name: row.querySelector(".fldName").value,
-                        Keywords: row.querySelector(".fldKeywords").value,
-                        MatchMode: row.querySelector(".fldMatchMode").value,
-                        CaseSensitive: row.querySelector(".fldCaseSensitive").checked,
-                        MatchPrograms: row.querySelector(".fldMatchPrograms").checked,
-                        Enabled: row.querySelector(".fldEnabled").checked,
-                        CollectionId: row.dataset.collectionId || "00000000-0000-0000-0000-000000000000"
-                    });
+                    groups.push(readGroupRow(row));
                 });
                 return groups;
             }

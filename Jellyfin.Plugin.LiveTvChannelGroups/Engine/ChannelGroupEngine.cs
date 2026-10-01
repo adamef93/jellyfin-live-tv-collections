@@ -18,6 +18,14 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.LiveTvChannelGroups.Engine;
 
 /// <summary>
+/// Why a channel matched a rule.
+/// </summary>
+/// <param name="Source">Either "name" (the channel name) or "program" (an upcoming guide program).</param>
+/// <param name="Text">The channel or program name that matched.</param>
+/// <param name="Keyword">The keyword or pattern that matched it.</param>
+public record MatchReason(string Source, string Text, string Keyword);
+
+/// <summary>
 /// Matches Live TV channels against the configured keyword rules and applies
 /// the result as Tags and, optionally, Collections.
 /// </summary>
@@ -101,30 +109,86 @@ public class ChannelGroupEngine
     /// <returns><c>true</c> if the channel matches.</returns>
     public static bool IsMatch(LiveTvChannel channel, ChannelGroupRule rule, IReadOnlyDictionary<Guid, string[]> programNames)
     {
-        if (!rule.Enabled || string.IsNullOrWhiteSpace(rule.Keywords))
-        {
-            return false;
-        }
-
-        if (IsTextMatch(channel.Name ?? string.Empty, rule))
-        {
-            return true;
-        }
-
-        return rule.MatchPrograms
-            && programNames.TryGetValue(channel.Id, out var names)
-            && names.Any(n => IsTextMatch(n, rule));
+        return rule.Enabled && FindMatch(channel, rule, programNames) is not null;
     }
 
-    private static bool IsTextMatch(string text, ChannelGroupRule rule)
+    /// <summary>
+    /// Finds why a channel matches a rule: which keyword hit, and whether it hit
+    /// the channel name or a program name. Ignores <see cref="ChannelGroupRule.Enabled"/>
+    /// so unsaved or disabled rules can be previewed.
+    /// </summary>
+    /// <param name="channel">The channel to test.</param>
+    /// <param name="rule">The rule to test against.</param>
+    /// <param name="programNames">Upcoming program names by channel id, from <see cref="GetUpcomingProgramNames"/>.</param>
+    /// <returns>The match reason, or <c>null</c> if the channel does not match.</returns>
+    public static MatchReason? FindMatch(LiveTvChannel channel, ChannelGroupRule rule, IReadOnlyDictionary<Guid, string[]> programNames)
+    {
+        if (string.IsNullOrWhiteSpace(rule.Keywords))
+        {
+            return null;
+        }
+
+        var name = channel.Name ?? string.Empty;
+        var keyword = FindMatchingKeyword(name, rule);
+        if (keyword is not null)
+        {
+            return new MatchReason("name", name, keyword);
+        }
+
+        if (rule.MatchPrograms && programNames.TryGetValue(channel.Id, out var names))
+        {
+            foreach (var programName in names)
+            {
+                keyword = FindMatchingKeyword(programName, rule);
+                if (keyword is not null)
+                {
+                    return new MatchReason("program", programName, keyword);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Lists the keywords of a Regex-mode rule that are not valid regular
+    /// expressions (and are therefore silently skipped when matching).
+    /// </summary>
+    /// <param name="rule">The rule to check.</param>
+    /// <returns>The invalid patterns; empty for other match modes.</returns>
+    public static IReadOnlyList<string> GetInvalidPatterns(ChannelGroupRule rule)
+    {
+        var invalid = new List<string>();
+        if (rule.MatchMode != MatchMode.Regex)
+        {
+            return invalid;
+        }
+
+        foreach (var keyword in SplitKeywords(rule))
+        {
+            try
+            {
+                _ = new Regex(keyword);
+            }
+            catch (ArgumentException)
+            {
+                invalid.Add(keyword);
+            }
+        }
+
+        return invalid;
+    }
+
+    private static string[] SplitKeywords(ChannelGroupRule rule)
+        => (rule.Keywords ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static string? FindMatchingKeyword(string text, ChannelGroupRule rule)
     {
         var comparison = rule.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var regexOptions = rule.CaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
 
-        var keywords = rule.Keywords
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        foreach (var keyword in keywords)
+        foreach (var keyword in SplitKeywords(rule))
         {
             if (keyword.Length == 0)
             {
@@ -133,30 +197,17 @@ public class ChannelGroupEngine
 
             try
             {
-                switch (rule.MatchMode)
+                var matched = rule.MatchMode switch
                 {
-                    case MatchMode.Contains:
-                        if (text.Contains(keyword, comparison))
-                        {
-                            return true;
-                        }
+                    MatchMode.Contains => text.Contains(keyword, comparison),
+                    MatchMode.WholeWord => Regex.IsMatch(text, $@"\b{Regex.Escape(keyword)}\b", regexOptions),
+                    MatchMode.Regex => Regex.IsMatch(text, keyword, regexOptions),
+                    _ => false
+                };
 
-                        break;
-                    case MatchMode.WholeWord:
-                        var wholeWordPattern = $@"\b{Regex.Escape(keyword)}\b";
-                        if (Regex.IsMatch(text, wholeWordPattern, regexOptions))
-                        {
-                            return true;
-                        }
-
-                        break;
-                    case MatchMode.Regex:
-                        if (Regex.IsMatch(text, keyword, regexOptions))
-                        {
-                            return true;
-                        }
-
-                        break;
+                if (matched)
+                {
+                    return keyword;
                 }
             }
             catch (RegexParseException)
@@ -166,7 +217,7 @@ public class ChannelGroupEngine
             }
         }
 
-        return false;
+        return null;
     }
 
     /// <summary>
