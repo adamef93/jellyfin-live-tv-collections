@@ -3,6 +3,14 @@
     "guid": "37fb33f3-2692-4c45-a4f6-f7e0279b1a5e",
     "versions": [
       {
+        "version": "1.2.1.0",
+        "changelog": "The program lookahead setting is now in days (default 7, max 30) instead of hours.\n\nExisting configs that stored a value in hours are converted automatically (rounded up to whole days) and switch to days the next time you save the settings page.\n\nInstall / upgrade: add https://raw.githubusercontent.com/adamef93/jellyfin-live-tv-collections/main/manifest.json under Dashboard > Plugins > Repositories, install or update Live TV Channel Groups from the catalog, and restart Jellyfin.\n\nFull changelog: https://github.com/adamef93/jellyfin-live-tv-collections/compare/v1.2.0...v1.2.1",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/adamef93/jellyfin-live-tv-collections/releases/download/v1.2.1/live-tv-channel-groups_1.2.1.0.zip",
+        "checksum": "23be49ea30518b2b2e0653619ecc417b",
+        "timestamp": "2026-10-01T14:46:28Z"
+      },
+      {
         "version": "1.2.0.0",
         "changelog": "Per-group match preview panel on the config page; the program-matching option now shows the current lookahead window (Program lookahead setting, 168 hours by default).",
         "targetAbi": "10.11.0.0",
