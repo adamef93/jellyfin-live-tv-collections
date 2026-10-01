@@ -7,7 +7,7 @@
     <div id="LiveTvChannelGroupsConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
         <div data-role="content">
             <div class="content-primary">
-                <form id="LiveTvChannelGroupsConfigForm" style="max-width: 60em;">
+                <form id="LiveTvChannelGroupsConfigForm" style="max-width: 100em;">
                     <div class="verticalSection" id="jsStatusSection">
                         <p id="jsStatus" style="font-family:monospace; padding:0.75em; background:#333; color:#fc0;">
                             JavaScript has not run yet. If this text never changes after the page finishes loading,
@@ -145,6 +145,12 @@
             // innerHTML are not guaranteed to be upgraded (or, if upgrade throws, can
             // abort the surrounding script silently). Plain elements always work and
             // still submit/read like normal form fields, just without the themed look.
+            function updateLookaheadLabels(page) {
+                var hours = parseInt(page.querySelector("#txtProgramLookaheadHours").value, 10);
+                var text = String(isNaN(hours) ? 168 : Math.max(0, hours));
+                page.querySelectorAll(".lblLookaheadHours").forEach(function (el) { el.textContent = text; });
+            }
+
             function renderGroups(page, groups) {
                 var container = page.querySelector("#groupsContainer");
                 if (!container) {
@@ -162,6 +168,8 @@
                     row.dataset.groupId = group.Id;
 
                     row.innerHTML =
+                        '<div style="display:flex; flex-wrap:wrap; gap:2em;">' +
+                        '<div style="flex:1 1 26em; min-width:0;">' +
                         '<div class="flex align-items-center justify-content-space-between">' +
                         '  <h3 style="margin:0;">Group ' + (index + 1) + '</h3>' +
                         '  <label class="checkboxContainer" style="margin:0;">' +
@@ -191,9 +199,19 @@
                         '</label>' +
                         '<label class="checkboxContainer">' +
                         '  <input type="checkbox" class="fldMatchPrograms" ' + (group.MatchPrograms ? "checked" : "") + ' />' +
-                        '  <span>Also match program names in the guide (e.g. CBS while it has an NFL game coming up)</span>' +
+                        '  <span>Also match channels with upcoming games or programs matching these keywords (looks ahead <span class="lblLookaheadHours">168</span> hours; change under Program lookahead in settings above)</span>' +
                         '</label>' +
-                        '<button type="button" class="raised button-alt btnRemoveGroup"><span>Remove group</span></button>';
+                        '<button type="button" class="raised button-alt btnPreviewGroup"><span>Preview matches</span></button> ' +
+                        '<button type="button" class="raised button-alt btnRemoveGroup"><span>Remove group</span></button>' +
+                        '</div>' +
+                        '<div style="flex:1 1 22em; min-width:0; border-left:1px solid rgba(255,255,255,0.12); padding-left:2em;">' +
+                        '  <div class="groupPreview"><span style="opacity:0.6;">Click \u201cPreview matches\u201d to see which channels this group would include.</span></div>' +
+                        '</div>' +
+                        '</div>';
+
+                    row.querySelector(".btnPreviewGroup").addEventListener("click", function () {
+                        previewGroup(row);
+                    });
 
                     row.querySelector(".btnRemoveGroup").addEventListener("click", function () {
                         row.remove();
@@ -203,20 +221,85 @@
                 });
             }
 
+            // Dry-runs the group as currently typed (no save needed) and lists which
+            // channels match, and which keyword hit which channel/program name.
+            function previewGroup(row) {
+                var out = row.querySelector(".groupPreview");
+                var group = readGroupRow(row);
+                out.innerHTML = '<span style="opacity:0.6;">Checking...</span>';
+                ApiClient.ajax({
+                    type: "POST",
+                    url: ApiClient.getUrl("LiveTvChannelGroups/Preview"),
+                    data: JSON.stringify(group),
+                    contentType: "application/json",
+                    dataType: "json"
+                }).then(function (result) {
+                    out.innerHTML = "";
+
+                    var head = document.createElement("h4");
+                    head.style.margin = "0 0 0.75em 0";
+                    head.textContent = result.Matches.length + " matching channel" +
+                        (result.Matches.length === 1 ? "" : "s");
+                    var total = document.createElement("span");
+                    total.style.cssText = "opacity:0.6; font-weight:normal;";
+                    total.textContent = "  of " + result.ChannelsScanned;
+                    head.appendChild(total);
+                    out.appendChild(head);
+
+                    if (result.InvalidPatterns.length) {
+                        var warn = document.createElement("p");
+                        warn.style.color = "#f66";
+                        warn.textContent = "Invalid pattern, ignored: " + result.InvalidPatterns.join(", ");
+                        out.appendChild(warn);
+                    }
+
+                    var list = document.createElement("div");
+                    list.style.cssText = "max-height:22em; overflow-y:auto; display:grid; " +
+                        "grid-template-columns:repeat(auto-fill, minmax(15em, 1fr)); gap:0.25em 1.5em;";
+                    result.Matches.forEach(function (m) {
+                        var item = document.createElement("div");
+                        item.style.cssText = "overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0.2em 0;";
+                        if (m.Number) {
+                            var num = document.createElement("span");
+                            num.style.cssText = "opacity:0.55; display:inline-block; min-width:3em;";
+                            num.textContent = m.Number;
+                            item.appendChild(num);
+                        }
+                        item.appendChild(document.createTextNode(m.Name));
+                        if (m.MatchedOn === "program") {
+                            item.title = "Matched via program: " + m.MatchedText;
+                            var tag = document.createElement("span");
+                            tag.style.cssText = "opacity:0.55; font-size:0.85em;";
+                            tag.textContent = " \u00b7 guide";
+                            item.appendChild(tag);
+                        }
+                        list.appendChild(item);
+                    });
+                    out.appendChild(list);
+                }).catch(function (err) {
+                    console.error("LiveTvChannelGroups: preview failed", err);
+                    out.textContent = "Preview failed. Check the server log for details.";
+                });
+            }
+
+            function readGroupRow(row) {
+                return {
+                    Id: row.dataset.groupId,
+                    Name: row.querySelector(".fldName").value,
+                    Keywords: row.querySelector(".fldKeywords").value,
+                    MatchMode: row.querySelector(".fldMatchMode").value,
+                    CaseSensitive: row.querySelector(".fldCaseSensitive").checked,
+                    MatchPrograms: row.querySelector(".fldMatchPrograms").checked,
+                    Enabled: row.querySelector(".fldEnabled").checked,
+                    CollectionId: row.dataset.collectionId || "00000000-0000-0000-0000-000000000000"
+                };
+            }
+
             function readGroupsFromForm(page) {
                 var rows = page.querySelectorAll("#groupsContainer [data-group-id]");
                 var groups = [];
                 rows.forEach(function (row) {
-                    groups.push({
-                        Id: row.dataset.groupId,
-                        Name: row.querySelector(".fldName").value,
-                        Keywords: row.querySelector(".fldKeywords").value,
-                        MatchMode: row.querySelector(".fldMatchMode").value,
-                        CaseSensitive: row.querySelector(".fldCaseSensitive").checked,
-                        MatchPrograms: row.querySelector(".fldMatchPrograms").checked,
-                        Enabled: row.querySelector(".fldEnabled").checked,
-                        CollectionId: row.dataset.collectionId || "00000000-0000-0000-0000-000000000000"
-                    });
+                    groups.push(readGroupRow(row));
                 });
                 return groups;
             }
@@ -237,6 +320,7 @@
                     page.querySelector("#txtProgramLookaheadHours").value =
                         config.ProgramLookaheadHours == null ? 168 : config.ProgramLookaheadHours;
                     renderGroups(page, config.Groups || []);
+                    updateLookaheadLabels(page);
                     setStatus("JS running. Configuration loaded (" + (config.Groups || []).length + " groups).");
                     if (typeof Dashboard !== "undefined") { Dashboard.hideLoadingMsg(); }
                 }).catch(function (err) {
@@ -250,6 +334,9 @@
             // which may not fire in newer clients. Also reload on pageshow if it does.
             loadConfig();
             page.addEventListener("pageshow", loadConfig);
+            page.querySelector("#txtProgramLookaheadHours").addEventListener("input", function () {
+                updateLookaheadLabels(page);
+            });
 
             page.querySelector("#btnAddGroup").addEventListener("click", function (e) {
                 e.preventDefault();
@@ -257,6 +344,7 @@
                     var current = readGroupsFromForm(page);
                     current.push(emptyGroup());
                     renderGroups(page, current);
+                    updateLookaheadLabels(page);
                 } catch (err) {
                     console.error("LiveTvChannelGroups: add group failed", err);
                     setStatus("Could not add group: " + err.message);
