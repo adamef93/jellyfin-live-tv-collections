@@ -7,7 +7,7 @@
     <div id="LiveTvChannelGroupsConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
         <div data-role="content">
             <div class="content-primary">
-                <form id="LiveTvChannelGroupsConfigForm" style="max-width: 60em;">
+                <form id="LiveTvChannelGroupsConfigForm" style="max-width: 100em;">
                     <div class="verticalSection" id="jsStatusSection">
                         <p id="jsStatus" style="font-family:monospace; padding:0.75em; background:#333; color:#fc0;">
                             JavaScript has not run yet. If this text never changes after the page finishes loading,
@@ -162,6 +162,8 @@
                     row.dataset.groupId = group.Id;
 
                     row.innerHTML =
+                        '<div style="display:flex; flex-wrap:wrap; gap:2em;">' +
+                        '<div style="flex:1 1 26em; min-width:0;">' +
                         '<div class="flex align-items-center justify-content-space-between">' +
                         '  <h3 style="margin:0;">Group ' + (index + 1) + '</h3>' +
                         '  <label class="checkboxContainer" style="margin:0;">' +
@@ -195,7 +197,11 @@
                         '</label>' +
                         '<button type="button" class="raised button-alt btnPreviewGroup"><span>Preview matches</span></button> ' +
                         '<button type="button" class="raised button-alt btnRemoveGroup"><span>Remove group</span></button>' +
-                        '<div class="groupPreview" style="margin-top:1em;"></div>';
+                        '</div>' +
+                        '<div style="flex:1 1 22em; min-width:0; border-left:1px solid rgba(255,255,255,0.12); padding-left:2em;">' +
+                        '  <div class="groupPreview"><span style="opacity:0.6;">Click \u201cPreview matches\u201d to see which channels this group would include.</span></div>' +
+                        '</div>' +
+                        '</div>';
 
                     row.querySelector(".btnPreviewGroup").addEventListener("click", function () {
                         previewGroup(row);
@@ -214,7 +220,7 @@
             function previewGroup(row) {
                 var out = row.querySelector(".groupPreview");
                 var group = readGroupRow(row);
-                out.textContent = "Checking...";
+                out.innerHTML = '<span style="opacity:0.6;">Checking...</span>';
                 ApiClient.ajax({
                     type: "POST",
                     url: ApiClient.getUrl("LiveTvChannelGroups/Preview"),
@@ -223,29 +229,45 @@
                     dataType: "json"
                 }).then(function (result) {
                     out.innerHTML = "";
-                    var head = document.createElement("p");
-                    head.style.fontWeight = "bold";
-                    head.textContent = result.Matches.length + " of " + result.ChannelsScanned + " channels match";
+
+                    var head = document.createElement("h4");
+                    head.style.margin = "0 0 0.75em 0";
+                    head.textContent = result.Matches.length + " matching channel" +
+                        (result.Matches.length === 1 ? "" : "s");
+                    var total = document.createElement("span");
+                    total.style.cssText = "opacity:0.6; font-weight:normal;";
+                    total.textContent = "  of " + result.ChannelsScanned;
+                    head.appendChild(total);
                     out.appendChild(head);
+
                     if (result.InvalidPatterns.length) {
                         var warn = document.createElement("p");
                         warn.style.color = "#f66";
-                        warn.textContent = "Invalid regular expression (skipped): " + result.InvalidPatterns.join(", ");
+                        warn.textContent = "Invalid pattern, ignored: " + result.InvalidPatterns.join(", ");
                         out.appendChild(warn);
                     }
+
                     var list = document.createElement("div");
-                    list.style.maxHeight = "20em";
-                    list.style.overflowY = "auto";
-                    list.style.fontFamily = "monospace";
-                    list.style.fontSize = "0.9em";
+                    list.style.cssText = "max-height:22em; overflow-y:auto; display:grid; " +
+                        "grid-template-columns:repeat(auto-fill, minmax(15em, 1fr)); gap:0.25em 1.5em;";
                     result.Matches.forEach(function (m) {
-                        var line = document.createElement("div");
-                        var label = (m.Number ? m.Number + " " : "") + m.Name;
-                        var why = m.MatchedOn === "program"
-                            ? ' \u2190 program "' + m.MatchedText + '"'
-                            : "";
-                        line.textContent = label + why + "   [" + m.Keyword + "]";
-                        list.appendChild(line);
+                        var item = document.createElement("div");
+                        item.style.cssText = "overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0.2em 0;";
+                        if (m.Number) {
+                            var num = document.createElement("span");
+                            num.style.cssText = "opacity:0.55; display:inline-block; min-width:3em;";
+                            num.textContent = m.Number;
+                            item.appendChild(num);
+                        }
+                        item.appendChild(document.createTextNode(m.Name));
+                        if (m.MatchedOn === "program") {
+                            item.title = "Matched via program: " + m.MatchedText;
+                            var tag = document.createElement("span");
+                            tag.style.cssText = "opacity:0.55; font-size:0.85em;";
+                            tag.textContent = " \u00b7 guide";
+                            item.appendChild(tag);
+                        }
+                        list.appendChild(item);
                     });
                     out.appendChild(list);
                 }).catch(function (err) {
