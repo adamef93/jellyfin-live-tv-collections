@@ -4,7 +4,7 @@
     "versions": [
       {
         "version": "1.2.0.0",
-        "changelog": "v1.2.0",
+        "changelog": "Per-group match preview panel on the config page; the program-matching option now shows the current lookahead window (Program lookahead setting, 168 hours by default).",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/adamef93/jellyfin-live-tv-collections/releases/download/v1.2.0/live-tv-channel-groups_1.2.0.0.zip",
         "checksum": "4e5d6f7fae5c4eaca84de31cc0ec0761",
