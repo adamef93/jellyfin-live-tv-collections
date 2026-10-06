@@ -91,6 +91,21 @@ public class ChannelGroupsController : ControllerBase
     }
 
     /// <summary>
+    /// Deletes a group and the Collection synced for it. Used by the config
+    /// page's "Remove group" dialog when "delete the collection" is ticked.
+    /// </summary>
+    /// <param name="id">The group's id.</param>
+    /// <returns>No content on success, or not found if no such group is saved.</returns>
+    [HttpDelete("Groups/{id}")]
+    [ProducesResponseType(204)]
+    [ProducesResponseType(404)]
+    public async Task<ActionResult> DeleteGroup([FromRoute] string id)
+    {
+        var deleted = await _engine.DeleteGroupAsync(id).ConfigureAwait(false);
+        return deleted ? NoContent() : NotFound();
+    }
+
+    /// <summary>
     /// Runs a full apply pass immediately (equivalent to running the "Apply
     /// Live TV Channel Groups" scheduled task from Dashboard &gt; Scheduled
     /// Tasks, but synchronous and without waiting for the task queue).

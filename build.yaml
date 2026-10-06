@@ -1,7 +1,7 @@
 ---
 name: "Live TV Channel Groups"
 guid: "37fb33f3-2692-4c45-a4f6-f7e0279b1a5e"
-version: "1.2.1.0"
+version: "1.2.2.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Group Live TV channels by keyword (Hockey, NFL, News, ...)"
@@ -17,6 +17,7 @@ owner: "adamef93"
 artifacts:
 - "Jellyfin.Plugin.LiveTvChannelGroups.dll"
 changelog: >
+  1.2.2.0 - Collections now sort by name. Removing a group asks for confirmation and can also delete its Jellyfin collection.
   1.2.1.0 - The program lookahead setting is now in days (default 7) instead of hours; existing hour values are converted automatically.
   1.2.0.0 - Per-group match preview panel on the config page; the program-matching option now shows the current lookahead window.
   1.1.0.0 - Groups can optionally match upcoming guide program names as well as

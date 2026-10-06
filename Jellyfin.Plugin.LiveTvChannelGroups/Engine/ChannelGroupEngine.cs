@@ -391,8 +391,11 @@ public class ChannelGroupEngine
             }).ConfigureAwait(false);
 
             rule.CollectionId = boxSet.Id;
+            await EnsureSortNameOrderAsync(boxSet, cancellationToken).ConfigureAwait(false);
             return true;
         }
+
+        var orderChanged = await EnsureSortNameOrderAsync(boxSet, cancellationToken).ConfigureAwait(false);
 
         var existingChildIds = (boxSet.LinkedChildren ?? Array.Empty<LinkedChild>())
             .Select(c => c.ItemId ?? Guid.Empty)
@@ -404,7 +407,7 @@ public class ChannelGroupEngine
 
         if (toAdd.Count == 0 && toRemove.Count == 0)
         {
-            return false;
+            return orderChanged;
         }
 
         if (toAdd.Count > 0)
@@ -418,6 +421,58 @@ public class ChannelGroupEngine
         }
 
         return true;
+    }
+
+    // Channels have no premiere date, so the default PremiereDate ordering is arbitrary.
+    private async Task<bool> EnsureSortNameOrderAsync(BoxSet boxSet, CancellationToken cancellationToken)
+    {
+        if (string.Equals(boxSet.DisplayOrder, "SortName", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        boxSet.DisplayOrder = "SortName";
+        await _libraryManager
+            .UpdateItemAsync(boxSet, boxSet.GetParent(), ItemUpdateType.MetadataEdit, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Deletes a group's Collection (BoxSet), if it has one, and removes the
+    /// group from the configuration. Tags already applied to channels are
+    /// left in place.
+    /// </summary>
+    /// <param name="groupId">The rule's <see cref="ChannelGroupRule.Id"/>.</param>
+    /// <returns><c>true</c> if the group existed and was deleted.</returns>
+    public async Task<bool> DeleteGroupAsync(string groupId)
+    {
+        await _applyLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var rule = Config.Groups.FirstOrDefault(r => string.Equals(r.Id, groupId, StringComparison.Ordinal));
+            if (rule is null)
+            {
+                return false;
+            }
+
+            if (rule.CollectionId != Guid.Empty && _libraryManager.GetItemById(rule.CollectionId) is BoxSet boxSet)
+            {
+                _logger.LogInformation("Deleting collection for Live TV channel group '{Name}'", rule.Name);
+
+                // Jellyfin keeps each collection in a folder of its own; leave that
+                // behind and a library scan would bring the collection back.
+                _libraryManager.DeleteItem(boxSet, new DeleteOptions { DeleteFileLocation = true });
+            }
+
+            Config.Groups.Remove(rule);
+            Plugin.Instance!.SaveConfiguration();
+            return true;
+        }
+        finally
+        {
+            _applyLock.Release();
+        }
     }
 
     private string StatePath => Path.Combine(Plugin.Instance!.DataFolderPath, "state.json");

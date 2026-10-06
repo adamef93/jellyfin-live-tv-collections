@@ -216,10 +216,100 @@
                     });
 
                     row.querySelector(".btnRemoveGroup").addEventListener("click", function () {
-                        row.remove();
+                        confirmRemoveGroup(row);
                     });
 
                     container.appendChild(row);
+                });
+            }
+
+            // Ids of the groups the server already has. Only those can have a
+            // Collection to delete.
+            var savedGroupIds = {};
+
+            // Asks before removing a group, with the option to delete its Collection
+            // too. Plain DOM rather than a Jellyfin dialog, for the same reason as the
+            // plain inputs above. Removing alone only takes effect on Save, as before;
+            // deleting the Collection happens immediately and removes the group with it.
+            function confirmRemoveGroup(row) {
+                var id = row.dataset.groupId;
+                var name = row.querySelector(".fldName").value || "this group";
+                var canDeleteCollection = !!savedGroupIds[id];
+
+                var overlay = document.createElement("div");
+                overlay.style.cssText = "position:fixed; inset:0; z-index:10000; display:flex; " +
+                    "align-items:center; justify-content:center; background:rgba(0,0,0,0.6);";
+
+                var box = document.createElement("div");
+                box.style.cssText = "max-width:28em; margin:1em; padding:1.5em; border-radius:0.4em; " +
+                    "background:#202020; color:#eee; box-shadow:0 0.5em 2em rgba(0,0,0,0.6);";
+
+                var title = document.createElement("h3");
+                title.style.margin = "0 0 0.75em 0";
+                title.textContent = "Remove “" + name + "”?";
+                box.appendChild(title);
+
+                var chkLabel = document.createElement("label");
+                chkLabel.className = "checkboxContainer";
+                var chk = document.createElement("input");
+                chk.type = "checkbox";
+                chk.disabled = !canDeleteCollection;
+                var chkText = document.createElement("span");
+                chkText.textContent = canDeleteCollection
+                    ? "Also delete this group’s Jellyfin collection"
+                    : "No collection to delete yet (this group has not been saved)";
+                chkLabel.appendChild(chk);
+                chkLabel.appendChild(chkText);
+                box.appendChild(chkLabel);
+
+                var note = document.createElement("p");
+                note.style.cssText = "opacity:0.6; font-size:0.9em;";
+                note.textContent = "Without the checkbox, the group is removed when you click Save and its " +
+                    "collection stays in Jellyfin. Deleting the collection happens right away and cannot be undone.";
+                box.appendChild(note);
+
+                var buttons = document.createElement("div");
+                buttons.style.cssText = "display:flex; gap:0.75em; justify-content:flex-end; margin-top:1em;";
+                var cancel = document.createElement("button");
+                cancel.type = "button";
+                cancel.className = "raised button-alt";
+                cancel.innerHTML = "<span>Cancel</span>";
+                var ok = document.createElement("button");
+                ok.type = "button";
+                ok.className = "raised button-submit";
+                ok.innerHTML = "<span>Remove</span>";
+                buttons.appendChild(cancel);
+                buttons.appendChild(ok);
+                box.appendChild(buttons);
+
+                overlay.appendChild(box);
+                document.body.appendChild(overlay);
+
+                function close() { overlay.remove(); }
+                cancel.addEventListener("click", close);
+                overlay.addEventListener("click", function (e) { if (e.target === overlay) { close(); } });
+
+                ok.addEventListener("click", function () {
+                    if (!chk.checked) {
+                        close();
+                        row.remove();
+                        return;
+                    }
+
+                    close();
+                    Dashboard.showLoadingMsg();
+                    ApiClient.ajax({
+                        type: "DELETE",
+                        url: ApiClient.getUrl("LiveTvChannelGroups/Groups/" + encodeURIComponent(id))
+                    }).then(function () {
+                        delete savedGroupIds[id];
+                        row.remove();
+                        Dashboard.hideLoadingMsg();
+                    }).catch(function (err) {
+                        Dashboard.hideLoadingMsg();
+                        console.error("LiveTvChannelGroups: delete failed", err);
+                        Dashboard.alert("Delete failed. Check the server log for details.");
+                    });
                 });
             }
 
@@ -323,6 +413,8 @@
                         config.ProgramLookaheadHours != null
                             ? Math.ceil(config.ProgramLookaheadHours / 24)
                             : (config.ProgramLookaheadDays == null ? 7 : config.ProgramLookaheadDays);
+                    savedGroupIds = {};
+                    (config.Groups || []).forEach(function (g) { savedGroupIds[g.Id] = true; });
                     renderGroups(page, config.Groups || []);
                     updateLookaheadLabels(page);
                     setStatus("JS running. Configuration loaded (" + (config.Groups || []).length + " groups).");
@@ -395,7 +487,11 @@
                         return g;
                     });
 
-                    return ApiClient.updatePluginConfiguration(pluginId, config);
+                    return ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                        savedGroupIds = {};
+                        config.Groups.forEach(function (g) { savedGroupIds[g.Id] = true; });
+                        return result;
+                    });
                 }).then(function (result) {
                     Dashboard.processPluginConfigurationUpdateResult(result);
                 }).catch(function (err) {
