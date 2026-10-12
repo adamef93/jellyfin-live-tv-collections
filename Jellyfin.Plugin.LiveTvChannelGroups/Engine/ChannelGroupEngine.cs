@@ -327,6 +327,16 @@ public class ChannelGroupEngine
                 }
             }
 
+            // Jellyfin builds a channel's default sort name from its channel number
+            // plus its name; force name-only so collections sort alphabetically.
+            if (config.CreateCollections
+                && matchedGroupNames.Count > 0
+                && !string.Equals(channel.ForcedSortName, channel.Name, StringComparison.Ordinal))
+            {
+                channel.ForcedSortName = channel.Name;
+                changed = true;
+            }
+
             if (changed)
             {
                 channel.Tags = currentTags.ToArray();
@@ -424,6 +434,7 @@ public class ChannelGroupEngine
     }
 
     // Channels have no premiere date, so the default PremiereDate ordering is arbitrary.
+    // Channel sort names are forced to the plain name in ApplyInternalAsync.
     private async Task<bool> EnsureSortNameOrderAsync(BoxSet boxSet, CancellationToken cancellationToken)
     {
         if (string.Equals(boxSet.DisplayOrder, "SortName", StringComparison.Ordinal))
