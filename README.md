@@ -83,12 +83,6 @@ plugin skips that apply pass rather than emptying the group.
 
 ![A League schedule group matching tonight's NFL game across channels](docs/screenshots/league-schedule.png)
 
-League schedules also work as a channel-group filter. Here a college football
-group takes only the ESPN and ESPN+ channels carrying a game on the college
-football schedule:
-
-![A college football group: ESPN and ESPN+ channel groups filtered by the college football schedule](docs/screenshots/channel-groups-league-filter.png)
-
 ### Settings
 
 | Setting | Default | Description |
