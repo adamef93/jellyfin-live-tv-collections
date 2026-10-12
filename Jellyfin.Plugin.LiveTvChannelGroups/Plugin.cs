@@ -48,6 +48,11 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             new PluginPageInfo
             {
                 Name = Name,
+                DisplayName = Name,
+
+                // Listed under Plugins in the dashboard's sidebar.
+                EnableInMainMenu = true,
+                MenuIcon = "live_tv",
                 EmbeddedResourcePath = string.Format(
                     CultureInfo.InvariantCulture,
                     "{0}.Configuration.configPage.html",

@@ -17,6 +17,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
+        serviceCollection.AddSingleton<LeagueScheduleService>();
         serviceCollection.AddSingleton<ChannelGroupEngine>();
         serviceCollection.AddHostedService<ChannelGroupHostedService>();
     }
