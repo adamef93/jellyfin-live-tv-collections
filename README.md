@@ -5,6 +5,8 @@ A Jellyfin plugin that groups Live TV channels by keyword. Define a group like
 every matching channel is tagged with the group name and, optionally, added to
 a Collection of the same name that you can browse from any Jellyfin client.
 
+![An NHL collection built by the plugin: team channels plus the day's games](docs/screenshots/collection.png)
+
 ## Features
 
 - **Tags** — each matching channel gets a Tag with the group's name. Tags are
@@ -45,9 +47,12 @@ Future releases appear as plugin updates like any official plugin.
 
 ## Usage
 
-1. Go to **Dashboard → Plugins → Live TV Channel Groups**.
+1. Go to **Dashboard → Plugins → Live TV Channel Groups** (the plugin is also
+   listed in the dashboard's sidebar, under **Plugins**).
 2. Add a group, e.g. Name `Hockey`, Keywords `hockey, nhl, sportsnet`.
 3. Click **Save**, then **Apply now** (or wait for the next automatic run).
+
+![The plugin's settings page](docs/screenshots/settings.png)
 
 Keywords are matched against the channel **name**. Tick **Also match program
 names in the guide** on a group to also match the titles of programs airing now
@@ -64,6 +69,8 @@ the other ticked groups are taken whole. For example, an NHL group can take the
 NHL team and MSG groups whole and filter a mixed ESPN+ group down to NHL games.
 Groups come from the tuner's channel list as of the last guide refresh.
 
+![An NHL group built from channel groups: NHL team, MSG and DAZN channels taken whole, ESPN+ and TSN filtered to NHL games](docs/screenshots/channel-groups.png)
+
 Set **Match mode** (or a channel-group filter's **Keyword match mode**) to
 **League schedule** to match games instead of keywords. Tick the leagues; a
 channel or program then matches when its title names both teams of a game on
@@ -74,7 +81,13 @@ game from the same two schools' volleyball match. Schedules come from ESPN's
 public scoreboard and are cached for an hour; if they can't be fetched, the
 plugin skips that apply pass rather than emptying the group.
 
-The plugin also adds itself to the dashboard's sidebar, under **Plugins**.
+![A League schedule group matching tonight's NFL game across channels](docs/screenshots/league-schedule.png)
+
+League schedules also work as a channel-group filter. Here a college football
+group takes only the ESPN and ESPN+ channels carrying a game on the college
+football schedule:
+
+![A college football group: ESPN and ESPN+ channel groups filtered by the college football schedule](docs/screenshots/channel-groups-league-filter.png)
 
 ### Settings
 
