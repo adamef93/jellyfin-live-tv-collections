@@ -34,6 +34,7 @@ public class ChannelGroupEngine
     private readonly ILibraryManager _libraryManager;
     private readonly ICollectionManager _collectionManager;
     private readonly ITunerHostManager _tunerHostManager;
+    private readonly LeagueScheduleService _leagueSchedules;
     private readonly ILogger<ChannelGroupEngine> _logger;
     private readonly SemaphoreSlim _applyLock = new(1, 1);
 
@@ -43,16 +44,19 @@ public class ChannelGroupEngine
     /// <param name="libraryManager">The library manager.</param>
     /// <param name="collectionManager">The collection manager.</param>
     /// <param name="tunerHostManager">The tuner host manager.</param>
+    /// <param name="leagueSchedules">The league schedule service.</param>
     /// <param name="logger">The logger.</param>
     public ChannelGroupEngine(
         ILibraryManager libraryManager,
         ICollectionManager collectionManager,
         ITunerHostManager tunerHostManager,
+        LeagueScheduleService leagueSchedules,
         ILogger<ChannelGroupEngine> logger)
     {
         _libraryManager = libraryManager;
         _collectionManager = collectionManager;
         _tunerHostManager = tunerHostManager;
+        _leagueSchedules = leagueSchedules;
         _logger = logger;
     }
 
@@ -73,25 +77,68 @@ public class ChannelGroupEngine
     }
 
     /// <summary>
-    /// Fetches the names of guide programs airing now or starting within the
-    /// configured lookahead window, grouped by channel id. Returns an empty
-    /// map without querying the guide when no enabled rule matches on programs.
+    /// Gathers what the given rules need to be matched: the guide programs
+    /// airing now or within the lookahead window, the channels' tuner groups,
+    /// and the schedules of the leagues they use. Each is only fetched when an
+    /// enabled rule needs it.
     /// </summary>
+    /// <param name="channels">The channels that will be matched.</param>
     /// <param name="rules">The rules that will be evaluated.</param>
-    /// <returns>A map of channel id to the distinct program names on that channel.</returns>
-    public IReadOnlyDictionary<Guid, string[]> GetUpcomingProgramNames(IReadOnlyList<ChannelGroupRule> rules)
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The context, or <c>null</c> if the tuners' groups or a league schedule could not be read.</returns>
+    public async Task<MatchContext?> BuildMatchContextAsync(
+        IReadOnlyList<LiveTvChannel> channels,
+        IReadOnlyList<ChannelGroupRule> rules,
+        CancellationToken cancellationToken)
     {
-        if (!rules.Any(r => r.Enabled && r.MatchPrograms && UsesKeywords(r)))
+        var now = DateTime.UtcNow;
+        var lookaheadEnd = now.AddDays(Config.GetProgramLookaheadDays());
+        var enabled = rules.Where(r => r.Enabled).ToList();
+
+        // League rules time games against the guide and need a schedule, even
+        // with no lookahead: look at least a day ahead and half a day back.
+        var leagues = enabled.SelectMany(GetLeagues).DistinctBy(l => l.Id).ToList();
+        var guideFrom = leagues.Count > 0 ? now.AddHours(-12) : now;
+        var guideTo = leagues.Count > 0 ? Max(lookaheadEnd, now.AddDays(1)) : lookaheadEnd;
+
+        var needPrograms = leagues.Count > 0
+            || enabled.Any(r => r.MatchPrograms && UsesKeywords(r) && GetKeywordMatchMode(r) != MatchMode.League);
+        var programs = needPrograms
+            ? GetGuidePrograms(guideFrom, guideTo)
+            : new Dictionary<Guid, GuideProgram[]>();
+
+        IReadOnlyDictionary<Guid, string>? sourceGroups = new Dictionary<Guid, string>();
+        if (enabled.Any(r => r.MatchMode == MatchMode.ChannelGroups))
         {
-            return new Dictionary<Guid, string[]>();
+            sourceGroups = await LookupChannelSourceGroupsAsync(channels, cancellationToken).ConfigureAwait(false);
+            if (sourceGroups is null)
+            {
+                return null;
+            }
         }
 
-        var now = DateTime.UtcNow;
+        IReadOnlyList<ScheduledGame>? games = Array.Empty<ScheduledGame>();
+        if (leagues.Count > 0)
+        {
+            games = await _leagueSchedules.GetGamesAsync(leagues, now.AddHours(-12), guideTo, cancellationToken).ConfigureAwait(false);
+            if (games is null)
+            {
+                return null;
+            }
+        }
+
+        return new MatchContext(now, lookaheadEnd, programs, sourceGroups, games);
+    }
+
+    private static DateTime Max(DateTime a, DateTime b) => a > b ? a : b;
+
+    private Dictionary<Guid, GuideProgram[]> GetGuidePrograms(DateTime fromUtc, DateTime toUtc)
+    {
         var query = new InternalItemsQuery
         {
             IncludeItemTypes = new[] { BaseItemKind.LiveTvProgram },
-            MinEndDate = now,
-            MaxStartDate = now.AddDays(Config.GetProgramLookaheadDays())
+            MinEndDate = fromUtc,
+            MaxStartDate = toUtc
         };
 
         return _libraryManager.GetItemList(query)
@@ -100,8 +147,16 @@ public class ChannelGroupEngine
             .GroupBy(p => p.ChannelId)
             .ToDictionary(
                 g => g.Key,
-                g => g.Select(p => p.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+                g => g.Select(p => new GuideProgram(p.Name, p.StartDate, p.EndDate ?? p.StartDate))
+                    .Distinct()
+                    .ToArray());
     }
+
+    // The leagues a rule matches games of, if it matches by league at all.
+    private static IReadOnlyList<League> GetLeagues(ChannelGroupRule rule)
+        => UsesKeywords(rule) && GetKeywordMatchMode(rule) == MatchMode.League
+            ? Engine.Leagues.Resolve(rule.Leagues)
+            : Array.Empty<League>();
 
     /// <summary>
     /// Gets whether a rule matches keywords: always for keyword match modes,
@@ -115,31 +170,6 @@ public class ChannelGroupEngine
     // The mode a rule's keywords are matched with.
     private static MatchMode GetKeywordMatchMode(ChannelGroupRule rule)
         => rule.MatchMode == MatchMode.ChannelGroups ? rule.KeywordMatchMode : rule.MatchMode;
-
-    /// <summary>
-    /// Looks up each channel's tuner channel group (an M3U playlist's
-    /// <c>group-title</c>). Jellyfin reads the group when it parses the
-    /// playlist but does not store it on the channel, so this asks the tuners
-    /// for their channel lists, which they cache from the last guide refresh.
-    /// Returns an empty map without asking the tuners when no rule matches by
-    /// channel group.
-    /// </summary>
-    /// <param name="channels">The channels to look up.</param>
-    /// <param name="rules">The rules that will be evaluated.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>A map of channel id to group name, or <c>null</c> if a tuner could not be read.</returns>
-    public async Task<IReadOnlyDictionary<Guid, string>?> GetChannelSourceGroupsAsync(
-        IReadOnlyList<LiveTvChannel> channels,
-        IReadOnlyList<ChannelGroupRule> rules,
-        CancellationToken cancellationToken)
-    {
-        if (!rules.Any(r => r.Enabled && r.MatchMode == MatchMode.ChannelGroups))
-        {
-            return new Dictionary<Guid, string>();
-        }
-
-        return await LookupChannelSourceGroupsAsync(channels, cancellationToken).ConfigureAwait(false);
-    }
 
     /// <summary>
     /// Lists the tuner channel groups of the given channels, with how many
@@ -160,6 +190,10 @@ public class ChannelGroupEngine
             .ToList();
     }
 
+    // Jellyfin reads a channel's group (an M3U playlist's group-title) when it
+    // parses the playlist but does not store it on the channel, so ask the
+    // tuners for their channel lists, which they cache from the last guide
+    // refresh. Returns null if a tuner could not be read.
     private async Task<IReadOnlyDictionary<Guid, string>?> LookupChannelSourceGroupsAsync(
         IReadOnlyList<LiveTvChannel> channels,
         CancellationToken cancellationToken)
@@ -207,42 +241,34 @@ public class ChannelGroupEngine
 
     /// <summary>
     /// Tests whether a channel matches a rule: by its tuner channel group for
-    /// channel-group rules, and by keywords against the channel name and, if
-    /// the rule asks for it, the names of its upcoming programs.
+    /// channel-group rules, by scheduled games for league rules, and by
+    /// keywords against the channel name and, if the rule asks for it, the
+    /// names of its upcoming programs.
     /// </summary>
     /// <param name="channel">The channel to test.</param>
     /// <param name="rule">The rule to test against.</param>
-    /// <param name="programNames">Upcoming program names by channel id, from <see cref="GetUpcomingProgramNames"/>.</param>
-    /// <param name="sourceGroups">Tuner channel group by channel id, from <see cref="GetChannelSourceGroupsAsync"/>.</param>
+    /// <param name="context">The guide, groups and schedules, from <see cref="BuildMatchContextAsync"/>.</param>
     /// <returns><c>true</c> if the channel matches.</returns>
-    public static bool IsMatch(
-        LiveTvChannel channel,
-        ChannelGroupRule rule,
-        IReadOnlyDictionary<Guid, string[]> programNames,
-        IReadOnlyDictionary<Guid, string> sourceGroups)
+    public static bool IsMatch(LiveTvChannel channel, ChannelGroupRule rule, MatchContext context)
     {
-        return rule.Enabled && FindMatch(channel, rule, programNames, sourceGroups) is not null;
+        return rule.Enabled && FindMatch(channel, rule, context) is not null;
     }
 
     /// <summary>
-    /// Finds why a channel matches a rule: which keyword hit, and whether it hit
-    /// the channel name or a program name. Ignores <see cref="ChannelGroupRule.Enabled"/>
-    /// so unsaved or disabled rules can be previewed.
+    /// Finds why a channel matches a rule: which keyword, group or game hit,
+    /// and whether it hit the channel name or a program name. Ignores
+    /// <see cref="ChannelGroupRule.Enabled"/> so unsaved or disabled rules can
+    /// be previewed.
     /// </summary>
     /// <param name="channel">The channel to test.</param>
     /// <param name="rule">The rule to test against.</param>
-    /// <param name="programNames">Upcoming program names by channel id, from <see cref="GetUpcomingProgramNames"/>.</param>
-    /// <param name="sourceGroups">Tuner channel group by channel id, from <see cref="GetChannelSourceGroupsAsync"/>.</param>
+    /// <param name="context">The guide, groups and schedules, from <see cref="BuildMatchContextAsync"/>.</param>
     /// <returns>The match reason, or <c>null</c> if the channel does not match.</returns>
-    public static MatchReason? FindMatch(
-        LiveTvChannel channel,
-        ChannelGroupRule rule,
-        IReadOnlyDictionary<Guid, string[]> programNames,
-        IReadOnlyDictionary<Guid, string> sourceGroups)
+    public static MatchReason? FindMatch(LiveTvChannel channel, ChannelGroupRule rule, MatchContext context)
     {
         if (rule.MatchMode == MatchMode.ChannelGroups)
         {
-            if (!sourceGroups.TryGetValue(channel.Id, out var sourceGroup)
+            if (!context.SourceGroups.TryGetValue(channel.Id, out var sourceGroup)
                 || !CleanGroups(rule.ChannelGroups).Contains(sourceGroup))
             {
                 return null;
@@ -252,6 +278,12 @@ public class ChannelGroupEngine
             {
                 return new MatchReason("group", sourceGroup, sourceGroup);
             }
+        }
+
+        var programs = context.Programs.TryGetValue(channel.Id, out var p) ? p : Array.Empty<GuideProgram>();
+        if (GetKeywordMatchMode(rule) == MatchMode.League)
+        {
+            return FindGameMatch(channel, rule, programs, context);
         }
 
         if (string.IsNullOrWhiteSpace(rule.Keywords))
@@ -266,14 +298,62 @@ public class ChannelGroupEngine
             return new MatchReason("name", name, keyword);
         }
 
-        if (rule.MatchPrograms && programNames.TryGetValue(channel.Id, out var names))
+        if (rule.MatchPrograms)
         {
-            foreach (var programName in names)
+            foreach (var programName in UpcomingPrograms(programs, context).Select(x => x.Name).Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 keyword = FindMatchingKeyword(programName, rule);
                 if (keyword is not null)
                 {
                     return new MatchReason("program", programName, keyword);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // Programs airing now or starting within the lookahead window.
+    private static IEnumerable<GuideProgram> UpcomingPrograms(GuideProgram[] programs, MatchContext context)
+        => programs.Where(x => x.EndUtc >= context.NowUtc && x.StartUtc <= context.LookaheadEndUtc);
+
+    // A channel matches a league when its name or (with program matching) an
+    // upcoming program names a scheduled game. Two schools can meet in several
+    // sports the same weekend under identical titles, so a title only counts
+    // when the guide has it starting near the game's scheduled start.
+    private static MatchReason? FindGameMatch(LiveTvChannel channel, ChannelGroupRule rule, GuideProgram[] programs, MatchContext context)
+    {
+        var leagues = Engine.Leagues.Resolve(rule.Leagues);
+        if (leagues.Count == 0)
+        {
+            return null;
+        }
+
+        var matcher = context.GetMatcher(leagues);
+        var name = channel.Name ?? string.Empty;
+        foreach (var game in matcher.FindGames(name))
+        {
+            // Event channels (e.g. ESPN+) carry the event as their program, so
+            // time it by that. With no such program, settle for the game being
+            // within the window.
+            var timed = programs.Where(x => matcher.FindGames(x.Name).Contains(game)).ToList();
+            var onTime = timed.Count > 0
+                ? timed.Any(x => GameMatcher.StartsNear(game, x.StartUtc))
+                : game.StartUtc >= context.NowUtc.AddHours(-6) && game.StartUtc <= Max(context.LookaheadEndUtc, context.NowUtc.AddDays(1));
+            if (onTime)
+            {
+                return new MatchReason("game", name, game.Label);
+            }
+        }
+
+        if (rule.MatchPrograms)
+        {
+            foreach (var program in UpcomingPrograms(programs, context))
+            {
+                var game = matcher.FindGames(program.Name).FirstOrDefault(g => GameMatcher.StartsNear(g, program.StartUtc));
+                if (game is not null)
+                {
+                    return new MatchReason("game", program.Name, game.Label);
                 }
             }
         }
@@ -359,20 +439,18 @@ public class ChannelGroupEngine
     /// </summary>
     /// <param name="channels">The channels to test.</param>
     /// <param name="rules">The rules to test.</param>
-    /// <param name="programNames">Upcoming program names by channel id, from <see cref="GetUpcomingProgramNames"/>.</param>
-    /// <param name="sourceGroups">Tuner channel group by channel id, from <see cref="GetChannelSourceGroupsAsync"/>.</param>
+    /// <param name="context">The guide, groups and schedules, from <see cref="BuildMatchContextAsync"/>.</param>
     /// <returns>A map of rule id to the list of matching channels.</returns>
     public static IReadOnlyDictionary<string, List<LiveTvChannel>> PreviewMatches(
         IReadOnlyList<LiveTvChannel> channels,
         IReadOnlyList<ChannelGroupRule> rules,
-        IReadOnlyDictionary<Guid, string[]> programNames,
-        IReadOnlyDictionary<Guid, string> sourceGroups)
+        MatchContext context)
     {
         var result = new Dictionary<string, List<LiveTvChannel>>();
 
         foreach (var rule in rules)
         {
-            result[rule.Id] = channels.Where(c => IsMatch(c, rule, programNames, sourceGroups)).ToList();
+            result[rule.Id] = channels.Where(c => IsMatch(c, rule, context)).ToList();
         }
 
         return result;
@@ -405,20 +483,19 @@ public class ChannelGroupEngine
         var config = Config;
         var rules = config.Groups.Where(r => r.Enabled && !string.IsNullOrWhiteSpace(r.Name)).ToList();
         var channels = GetAllChannels();
-        var programNames = GetUpcomingProgramNames(rules);
         var result = new ApplyResult
         {
             GroupsProcessed = rules.Count,
             ChannelsScanned = channels.Count
         };
 
-        var sourceGroups = await GetChannelSourceGroupsAsync(channels, rules, cancellationToken).ConfigureAwait(false);
-        if (sourceGroups is null)
+        var context = await BuildMatchContextAsync(channels, rules, cancellationToken).ConfigureAwait(false);
+        if (context is null)
         {
-            // Without groups, group-filtered rules would match nothing and this
-            // pass would strip their tags and empty their collections. Leave
-            // everything as it is until the tuners can be read again.
-            _logger.LogWarning("Skipping this apply pass: channel groups are unavailable");
+            // Without groups or schedules, those rules would match nothing and
+            // this pass would strip their tags and empty their collections.
+            // Leave everything as it is until they can be read again.
+            _logger.LogWarning("Skipping this apply pass: channel groups or league schedules are unavailable");
             return result;
         }
 
@@ -436,7 +513,7 @@ public class ChannelGroupEngine
             var matchedGroupNames = new List<string>();
             foreach (var rule in rules)
             {
-                if (IsMatch(channel, rule, programNames, sourceGroups))
+                if (IsMatch(channel, rule, context))
                 {
                     matchedGroupNames.Add(rule.Name);
                     groupChannelIds[rule.Id].Add(channel.Id);

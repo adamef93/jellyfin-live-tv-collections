@@ -19,6 +19,12 @@ public enum MatchMode
     Regex,
 
     /// <summary>
+    /// Matches games on the schedules of the selected <see cref="ChannelGroupRule.Leagues"/>:
+    /// a title naming both teams of a scheduled game, at the game's time.
+    /// </summary>
+    League,
+
+    /// <summary>
     /// Channels in the selected tuner channel groups join, optionally narrowed
     /// down by keywords matched with <see cref="ChannelGroupRule.KeywordMatchMode"/>.
     /// </summary>
@@ -109,6 +115,13 @@ public class ChannelGroupRule
     /// <see cref="FilteredChannelGroups"/> of a channel-group rule.
     /// </summary>
     public MatchMode KeywordMatchMode { get; set; } = MatchMode.Contains;
+
+    /// <summary>
+    /// Gets or sets the ids of the leagues (see <see cref="Engine.Leagues"/>)
+    /// whose scheduled games a <see cref="Configuration.MatchMode.League"/>
+    /// rule or filter matches.
+    /// </summary>
+    public List<string> Leagues { get; set; } = new();
 
     /// <summary>
     /// Gets or sets a value indicating whether this rule is active.

@@ -21,6 +21,9 @@ a Collection of the same name that you can browse from any Jellyfin client.
 - **Channel groups** — build a group straight from your tuner's own channel
   groups (an M3U playlist's `group-title`, such as Dispatcharr's channel
   groups), combining several and optionally narrowing them down by keyword.
+- **League schedules** — instead of writing team-name patterns, pick leagues
+  (NFL, college football, NHL, NBA, MLB, …) and match the games actually on
+  their schedules, checked against the guide's start times.
 - **Stays up to date automatically** — re-applies shortly after channels are
   added or updated (e.g. after a tuner or M3U rescan) or, for groups that match
   programs, after a guide refresh, and every 6 hours as a scheduled task.
@@ -60,6 +63,16 @@ that also match keywords, with the usual match modes and program matching;
 the other ticked groups are taken whole. For example, an NHL group can take the
 NHL team and MSG groups whole and filter a mixed ESPN+ group down to NHL games.
 Groups come from the tuner's channel list as of the last guide refresh.
+
+Set **Match mode** (or a channel-group filter's **Keyword match mode**) to
+**League schedule** to match games instead of keywords. Tick the leagues; a
+channel or program then matches when its title names both teams of a game on
+one of their schedules (`Georgia vs. Alabama`, `College Football : Georgia at
+Alabama`, `NHL.TV: Flyers @ Bruins`) and the guide has it starting within 90
+minutes of that game's scheduled start. The time check is what tells a football
+game from the same two schools' volleyball match. Schedules come from ESPN's
+public scoreboard and are cached for an hour; if they can't be fetched, the
+plugin skips that apply pass rather than emptying the group.
 
 The plugin also adds itself to the dashboard's sidebar, under **Plugins**.
 

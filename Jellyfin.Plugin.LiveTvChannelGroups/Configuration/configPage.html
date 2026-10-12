@@ -21,20 +21,12 @@
                     </div>
 
                     <div class="verticalSection">
-                        <h2>Live TV Channel Groups</h2>
+                        <h2>Live TV Channel Groups <span id="lblVersion" style="font-size:0.6em; font-weight:normal; opacity:0.6;"></span></h2>
                         <p>
                             Define named groups with keywords (e.g. <strong>Hockey</strong> &rarr;
                             <code>hockey, nhl, sportsnet</code>). Matching channels are tagged with the
                             group name, and — if "Also sync as Collections" is on — kept in a Collection
-                            of the same name so the group is browsable from any Jellyfin client, including
-                            third-party apps such as Moonfin.
-                        </p>
-                        <p>
-                            <strong>Note:</strong> custom groups cannot add new buttons to Moonfin's (or the
-                            web client's) built-in Live TV guide filter rail — that rail only understands
-                            Jellyfin's fixed Movies/Series/News/Kids/Sports/Favorites categories. Collections
-                            are the part of this plugin that actually shows up as a distinct, named, browsable
-                            group today.
+                            of the same name so the group is browsable from any Jellyfin client.
                         </p>
                     </div>
 
@@ -129,6 +121,7 @@
                     MatchPrograms: false,
                     ChannelGroups: [],
                     FilteredChannelGroups: [],
+                    Leagues: [],
                     FilterByKeywords: false,
                     KeywordMatchMode: "Contains",
                     Enabled: true,
@@ -237,8 +230,43 @@
                 host.appendChild(list);
             }
 
+            // The League match mode's presets, loaded alongside the configuration.
+            var leagues = [];
+
+            function buildLeaguePicker(host, group) {
+                var selected = {};
+                (group.Leagues || []).forEach(function (id) { selected[id] = true; });
+
+                var list = document.createElement("div");
+                list.style.cssText = "padding:0.5em 0.75em; margin:0.5em 0; border:1px solid rgba(255,255,255,0.12); " +
+                    "border-radius:0.3em; display:grid; grid-template-columns:repeat(auto-fill, minmax(14em, 1fr)); gap:0.2em 1.5em;";
+                leagues.forEach(function (l) {
+                    var label = document.createElement("label");
+                    label.style.cssText = "display:flex; align-items:center; gap:0.5em; padding:0.2em 0; cursor:pointer;";
+                    var chk = document.createElement("input");
+                    chk.type = "checkbox";
+                    chk.className = "fldLeague";
+                    chk.value = l.Id;
+                    chk.checked = !!selected[l.Id];
+                    var text = document.createElement("span");
+                    text.textContent = l.Name;
+                    label.appendChild(chk);
+                    label.appendChild(text);
+                    list.appendChild(label);
+                });
+
+                if (!leagues.length) {
+                    var err = document.createElement("p");
+                    err.style.color = "#f66";
+                    err.textContent = "Could not load the league list.";
+                    host.appendChild(err);
+                }
+
+                host.appendChild(list);
+            }
+
             function keywordModeOptions(selectedMode) {
-                return [["Contains", "Contains"], ["WholeWord", "Whole word"], ["Regex", "Regular expression"]]
+                return [["Contains", "Contains"], ["WholeWord", "Whole word"], ["Regex", "Regular expression"], ["League", "League schedule"]]
                     .map(function (o) {
                         return '<option value="' + o[0] + '"' + (selectedMode === o[0] ? " selected" : "") + '>' + o[1] + '</option>';
                     }).join("");
@@ -254,6 +282,12 @@
                 row.querySelector(".channelGroupSection").style.display = byGroup ? "" : "none";
                 row.querySelector(".keywordModeContainer").style.display = byGroup ? "" : "none";
                 row.querySelector(".keywordSection").style.display = (!byGroup || filter) ? "" : "none";
+
+                // League schedules replace the keyword text box.
+                var keywordMode = byGroup ? row.querySelector(".fldKeywordMatchMode").value : row.querySelector(".fldMatchMode").value;
+                var byLeague = keywordMode === "League";
+                row.querySelector(".leagueSection").style.display = byLeague ? "" : "none";
+                row.querySelector(".textKeywordSection").style.display = byLeague ? "none" : "";
             }
 
             function escapeHtml(value) {
@@ -329,6 +363,14 @@
                         '  <label class="selectLabel">Keyword match mode</label>' +
                         '  <select class="fldKeywordMatchMode emby-select">' + keywordModeOptions(keywordMode) + '</select>' +
                         '</div>' +
+                        '<div class="leagueSection">' +
+                        '  <label class="inputLabel">Leagues</label>' +
+                        '  <div class="fieldDescription">Matches channels and programs titled like a scheduled game of these ' +
+                        '    leagues at that game\u2019s time. Schedules ' +
+                        '    come from ESPN.</div>' +
+                        '  <div class="leagueHost"></div>' +
+                        '</div>' +
+                        '<div class="textKeywordSection">' +
                         '<div class="inputContainer">' +
                         '  <label class="inputLabel inputLabelUnfocused">Keywords (comma-separated)</label>' +
                         '  <input type="text" class="fldKeywords emby-input" value="' + escapeHtml(group.Keywords) + '" placeholder="e.g. hockey, nhl, sportsnet" />' +
@@ -337,6 +379,7 @@
                         '  <input type="checkbox" class="fldCaseSensitive" ' + (group.CaseSensitive ? "checked" : "") + ' />' +
                         '  <span>Case sensitive</span>' +
                         '</label>' +
+                        '</div>' +
                         '<label class="checkboxContainer">' +
                         '  <input type="checkbox" class="fldMatchPrograms" ' + (group.MatchPrograms ? "checked" : "") + ' />' +
                         '  <span>Also match channels with upcoming games or programs matching these keywords (looks ahead <span class="lblLookaheadDays">7 days</span>; change under Program lookahead in settings above)</span>' +
@@ -351,6 +394,7 @@
                         '</div>';
 
                     buildChannelGroupsPicker(row.querySelector(".srcGroupsHost"), group);
+                    buildLeaguePicker(row.querySelector(".leagueHost"), group);
 
                     // Switching a keyword rule to channel groups keeps its keywords
                     // and their match mode for the optional filter.
@@ -365,6 +409,9 @@
                         updateRowVisibility(row);
                     });
                     row.querySelector(".srcGroupsHost").addEventListener("change", function () {
+                        updateRowVisibility(row);
+                    });
+                    row.querySelector(".fldKeywordMatchMode").addEventListener("change", function () {
                         updateRowVisibility(row);
                     });
                     updateRowVisibility(row);
@@ -524,6 +571,12 @@
                             item.appendChild(tag);
                         } else if (m.MatchedOn === "group") {
                             item.title = "In channel group: " + m.MatchedText;
+                        } else if (m.MatchedOn === "game") {
+                            item.title = "Scheduled game " + m.Keyword + ": " + m.MatchedText;
+                            var gameTag = document.createElement("span");
+                            gameTag.style.cssText = "opacity:0.55; font-size:0.85em;";
+                            gameTag.textContent = " \u00b7 " + m.Keyword;
+                            item.appendChild(gameTag);
                         }
                         list.appendChild(item);
                     });
@@ -535,7 +588,10 @@
             }
 
             function readGroupRow(row) {
-                var channelGroups = [], filteredGroups = [];
+                var channelGroups = [], filteredGroups = [], leagueIds = [];
+                row.querySelectorAll(".fldLeague").forEach(function (chk) {
+                    if (chk.checked) { leagueIds.push(chk.value); }
+                });
                 row.querySelectorAll(".fldChannelGroup").forEach(function (chk) {
                     if (chk.checked) { channelGroups.push(chk.value); }
                 });
@@ -553,6 +609,7 @@
                     ChannelGroups: channelGroups,
                     FilteredChannelGroups: filteredGroups,
                     FilterByKeywords: false,
+                    Leagues: leagueIds,
                     KeywordMatchMode: mode === "ChannelGroups" ? row.querySelector(".fldKeywordMatchMode").value : mode,
                     Enabled: row.querySelector(".fldEnabled").checked,
                     CollectionId: row.dataset.collectionId || "00000000-0000-0000-0000-000000000000"
@@ -588,7 +645,27 @@
                     sourceGroups = [];
                     sourceGroupsError = true;
                 });
-                groupsLoaded.then(function () {
+                var leaguesLoaded = ApiClient.ajax({
+                    type: "GET",
+                    url: ApiClient.getUrl("LiveTvChannelGroups/Leagues"),
+                    dataType: "json"
+                }).then(function (list) {
+                    leagues = list || [];
+                }).catch(function (err) {
+                    console.error("LiveTvChannelGroups: loading leagues failed", err);
+                    leagues = [];
+                });
+                ApiClient.ajax({
+                    type: "GET",
+                    url: ApiClient.getUrl("Plugins"),
+                    dataType: "json"
+                }).then(function (plugins) {
+                    var self = (plugins || []).filter(function (pl) { return pl.Id.replace(/-/g, "") === pluginId.replace(/-/g, ""); })[0];
+                    if (self) { page.querySelector("#lblVersion").textContent = "v" + self.Version; }
+                }).catch(function (err) {
+                    console.error("LiveTvChannelGroups: loading version failed", err);
+                });
+                Promise.all([groupsLoaded, leaguesLoaded]).then(function () {
                     return ApiClient.getPluginConfiguration(pluginId);
                 }).then(function (config) {
                     page.querySelector("#chkCreateCollections").checked = !!config.CreateCollections;

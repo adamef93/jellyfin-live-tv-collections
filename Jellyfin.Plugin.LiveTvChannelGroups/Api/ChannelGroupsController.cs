@@ -23,6 +23,8 @@ namespace Jellyfin.Plugin.LiveTvChannelGroups.Api;
 [Produces("application/json")]
 public class ChannelGroupsController : ControllerBase
 {
+    private const string Unavailable = "Channel groups could not be read from the Live TV tuners, or a league schedule could not be fetched.";
+
     private readonly ChannelGroupEngine _engine;
 
     /// <summary>
@@ -47,14 +49,13 @@ public class ChannelGroupsController : ControllerBase
     {
         var config = Plugin.Instance!.Configuration;
         var channels = _engine.GetAllChannels();
-        var programNames = _engine.GetUpcomingProgramNames(config.Groups);
-        var sourceGroups = await _engine.GetChannelSourceGroupsAsync(channels, config.Groups, cancellationToken).ConfigureAwait(false);
-        if (sourceGroups is null)
+        var context = await _engine.BuildMatchContextAsync(channels, config.Groups, cancellationToken).ConfigureAwait(false);
+        if (context is null)
         {
-            return StatusCode(503, "Channel groups could not be read from the Live TV tuners.");
+            return StatusCode(503, Unavailable);
         }
 
-        var matches = ChannelGroupEngine.PreviewMatches(channels, config.Groups, programNames, sourceGroups);
+        var matches = ChannelGroupEngine.PreviewMatches(channels, config.Groups, context);
 
         var result = config.Groups.Select(rule => new GroupPreview(
             rule.Id,
@@ -82,17 +83,16 @@ public class ChannelGroupsController : ControllerBase
         // Preview regardless of whether the rule is currently enabled.
         rule.Enabled = true;
         var channels = _engine.GetAllChannels();
-        var programNames = _engine.GetUpcomingProgramNames(new[] { rule });
-        var sourceGroups = await _engine.GetChannelSourceGroupsAsync(channels, new[] { rule }, cancellationToken).ConfigureAwait(false);
-        if (sourceGroups is null)
+        var context = await _engine.BuildMatchContextAsync(channels, new[] { rule }, cancellationToken).ConfigureAwait(false);
+        if (context is null)
         {
-            return StatusCode(503, "Channel groups could not be read from the Live TV tuners.");
+            return StatusCode(503, Unavailable);
         }
 
         var matches = new List<ChannelMatch>();
         foreach (var channel in channels)
         {
-            var reason = ChannelGroupEngine.FindMatch(channel, rule, programNames, sourceGroups);
+            var reason = ChannelGroupEngine.FindMatch(channel, rule, context);
             if (reason is not null)
             {
                 matches.Add(new ChannelMatch(channel.Id, channel.Name, channel.Number, reason.Source, reason.Text, reason.Keyword));
@@ -125,6 +125,15 @@ public class ChannelGroupsController : ControllerBase
 
         return Ok(counts.Select(c => new SourceGroupSummary(c.Key, c.Value)).ToList());
     }
+
+    /// <summary>
+    /// Lists the leagues the League match mode can match games of.
+    /// </summary>
+    /// <returns>Each league's id and name.</returns>
+    [HttpGet("Leagues")]
+    [ProducesResponseType(200)]
+    public ActionResult<IReadOnlyList<LeagueSummary>> GetLeagues()
+        => Ok(Leagues.All.Select(l => new LeagueSummary(l.Id, l.Name)).ToList());
 
     /// <summary>
     /// Deletes a group and the Collection synced for it. Used by the config
