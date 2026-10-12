@@ -39,14 +39,22 @@ public class ChannelGroupsController : ControllerBase
     /// keywords. Nothing is changed on the server; this is a dry run.
     /// </summary>
     /// <returns>One <see cref="GroupPreview"/> per configured group.</returns>
+    /// <param name="cancellationToken">Cancellation token.</param>
     [HttpGet("Preview")]
     [ProducesResponseType(200)]
-    public ActionResult<IReadOnlyList<GroupPreview>> Preview()
+    [ProducesResponseType(503)]
+    public async Task<ActionResult<IReadOnlyList<GroupPreview>>> Preview(CancellationToken cancellationToken)
     {
         var config = Plugin.Instance!.Configuration;
         var channels = _engine.GetAllChannels();
         var programNames = _engine.GetUpcomingProgramNames(config.Groups);
-        var matches = ChannelGroupEngine.PreviewMatches(channels, config.Groups, programNames);
+        var sourceGroups = await _engine.GetChannelSourceGroupsAsync(channels, config.Groups, cancellationToken).ConfigureAwait(false);
+        if (sourceGroups is null)
+        {
+            return StatusCode(503, "Channel groups could not be read from the Live TV tuners.");
+        }
+
+        var matches = ChannelGroupEngine.PreviewMatches(channels, config.Groups, programNames, sourceGroups);
 
         var result = config.Groups.Select(rule => new GroupPreview(
             rule.Id,
@@ -64,20 +72,27 @@ public class ChannelGroupsController : ControllerBase
     /// "Preview matches" button so keywords can be tested before saving.
     /// </summary>
     /// <param name="rule">The rule to test.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The matching channels and any invalid regex patterns.</returns>
     [HttpPost("Preview")]
     [ProducesResponseType(200)]
-    public ActionResult<RulePreview> PreviewRule([FromBody] ChannelGroupRule rule)
+    [ProducesResponseType(503)]
+    public async Task<ActionResult<RulePreview>> PreviewRule([FromBody] ChannelGroupRule rule, CancellationToken cancellationToken)
     {
         // Preview regardless of whether the rule is currently enabled.
         rule.Enabled = true;
         var channels = _engine.GetAllChannels();
         var programNames = _engine.GetUpcomingProgramNames(new[] { rule });
+        var sourceGroups = await _engine.GetChannelSourceGroupsAsync(channels, new[] { rule }, cancellationToken).ConfigureAwait(false);
+        if (sourceGroups is null)
+        {
+            return StatusCode(503, "Channel groups could not be read from the Live TV tuners.");
+        }
 
         var matches = new List<ChannelMatch>();
         foreach (var channel in channels)
         {
-            var reason = ChannelGroupEngine.FindMatch(channel, rule, programNames);
+            var reason = ChannelGroupEngine.FindMatch(channel, rule, programNames, sourceGroups);
             if (reason is not null)
             {
                 matches.Add(new ChannelMatch(channel.Id, channel.Name, channel.Number, reason.Source, reason.Text, reason.Keyword));
@@ -88,6 +103,27 @@ public class ChannelGroupsController : ControllerBase
             channels.Count,
             matches.OrderBy(m => m.Name, System.StringComparer.OrdinalIgnoreCase).ToList(),
             ChannelGroupEngine.GetInvalidPatterns(rule)));
+    }
+
+    /// <summary>
+    /// Lists the tuner channel groups (an M3U playlist's <c>group-title</c>,
+    /// e.g. Dispatcharr's channel groups) of the current Live TV channels, for
+    /// the config page's group picker.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Each group with its channel count.</returns>
+    [HttpGet("SourceGroups")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(503)]
+    public async Task<ActionResult<IReadOnlyList<SourceGroupSummary>>> SourceGroups(CancellationToken cancellationToken)
+    {
+        var counts = await _engine.GetSourceGroupCountsAsync(_engine.GetAllChannels(), cancellationToken).ConfigureAwait(false);
+        if (counts is null)
+        {
+            return StatusCode(503, "Channel groups could not be read from the Live TV tuners.");
+        }
+
+        return Ok(counts.Select(c => new SourceGroupSummary(c.Key, c.Value)).ToList());
     }
 
     /// <summary>

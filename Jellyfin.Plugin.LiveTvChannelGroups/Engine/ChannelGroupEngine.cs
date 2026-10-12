@@ -20,9 +20,9 @@ namespace Jellyfin.Plugin.LiveTvChannelGroups.Engine;
 /// <summary>
 /// Why a channel matched a rule.
 /// </summary>
-/// <param name="Source">Either "name" (the channel name) or "program" (an upcoming guide program).</param>
-/// <param name="Text">The channel or program name that matched.</param>
-/// <param name="Keyword">The keyword or pattern that matched it.</param>
+/// <param name="Source">"name" (the channel name), "program" (an upcoming guide program) or "group" (the channel's tuner group, for rules without keywords).</param>
+/// <param name="Text">The channel name, program name or group that matched.</param>
+/// <param name="Keyword">The keyword, pattern or group that matched it.</param>
 public record MatchReason(string Source, string Text, string Keyword);
 
 /// <summary>
@@ -33,6 +33,7 @@ public class ChannelGroupEngine
 {
     private readonly ILibraryManager _libraryManager;
     private readonly ICollectionManager _collectionManager;
+    private readonly ITunerHostManager _tunerHostManager;
     private readonly ILogger<ChannelGroupEngine> _logger;
     private readonly SemaphoreSlim _applyLock = new(1, 1);
 
@@ -41,14 +42,17 @@ public class ChannelGroupEngine
     /// </summary>
     /// <param name="libraryManager">The library manager.</param>
     /// <param name="collectionManager">The collection manager.</param>
+    /// <param name="tunerHostManager">The tuner host manager.</param>
     /// <param name="logger">The logger.</param>
     public ChannelGroupEngine(
         ILibraryManager libraryManager,
         ICollectionManager collectionManager,
+        ITunerHostManager tunerHostManager,
         ILogger<ChannelGroupEngine> logger)
     {
         _libraryManager = libraryManager;
         _collectionManager = collectionManager;
+        _tunerHostManager = tunerHostManager;
         _logger = logger;
     }
 
@@ -77,7 +81,7 @@ public class ChannelGroupEngine
     /// <returns>A map of channel id to the distinct program names on that channel.</returns>
     public IReadOnlyDictionary<Guid, string[]> GetUpcomingProgramNames(IReadOnlyList<ChannelGroupRule> rules)
     {
-        if (!rules.Any(r => r.Enabled && r.MatchPrograms))
+        if (!rules.Any(r => r.Enabled && r.MatchPrograms && UsesKeywords(r)))
         {
             return new Dictionary<Guid, string[]>();
         }
@@ -100,16 +104,124 @@ public class ChannelGroupEngine
     }
 
     /// <summary>
-    /// Tests whether a channel matches a rule's keywords, by channel name and,
-    /// if the rule asks for it, by the names of its upcoming programs.
+    /// Gets whether a rule matches keywords: always for keyword match modes,
+    /// and for channel-group rules only when they filter a group by keyword.
+    /// </summary>
+    /// <param name="rule">The rule to check.</param>
+    /// <returns><c>true</c> if the rule's keywords are used.</returns>
+    public static bool UsesKeywords(ChannelGroupRule rule)
+        => rule.MatchMode != MatchMode.ChannelGroups || CleanGroups(rule.GetFilteredChannelGroups()).Count > 0;
+
+    // The mode a rule's keywords are matched with.
+    private static MatchMode GetKeywordMatchMode(ChannelGroupRule rule)
+        => rule.MatchMode == MatchMode.ChannelGroups ? rule.KeywordMatchMode : rule.MatchMode;
+
+    /// <summary>
+    /// Looks up each channel's tuner channel group (an M3U playlist's
+    /// <c>group-title</c>). Jellyfin reads the group when it parses the
+    /// playlist but does not store it on the channel, so this asks the tuners
+    /// for their channel lists, which they cache from the last guide refresh.
+    /// Returns an empty map without asking the tuners when no rule matches by
+    /// channel group.
+    /// </summary>
+    /// <param name="channels">The channels to look up.</param>
+    /// <param name="rules">The rules that will be evaluated.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A map of channel id to group name, or <c>null</c> if a tuner could not be read.</returns>
+    public async Task<IReadOnlyDictionary<Guid, string>?> GetChannelSourceGroupsAsync(
+        IReadOnlyList<LiveTvChannel> channels,
+        IReadOnlyList<ChannelGroupRule> rules,
+        CancellationToken cancellationToken)
+    {
+        if (!rules.Any(r => r.Enabled && r.MatchMode == MatchMode.ChannelGroups))
+        {
+            return new Dictionary<Guid, string>();
+        }
+
+        return await LookupChannelSourceGroupsAsync(channels, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Lists the tuner channel groups of the given channels, with how many
+    /// channels are in each. Used by the config page's group picker.
+    /// </summary>
+    /// <param name="channels">The channels to count.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Group names and channel counts, or <c>null</c> if a tuner could not be read.</returns>
+    public async Task<IReadOnlyList<KeyValuePair<string, int>>?> GetSourceGroupCountsAsync(
+        IReadOnlyList<LiveTvChannel> channels,
+        CancellationToken cancellationToken)
+    {
+        var groups = await LookupChannelSourceGroupsAsync(channels, cancellationToken).ConfigureAwait(false);
+        return groups?.Values
+            .GroupBy(g => g, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new KeyValuePair<string, int>(g.Key, g.Count()))
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private async Task<IReadOnlyDictionary<Guid, string>?> LookupChannelSourceGroupsAsync(
+        IReadOnlyList<LiveTvChannel> channels,
+        CancellationToken cancellationToken)
+    {
+        // A channel's ExternalId is the tuner's ChannelInfo.Id.
+        var groupByExternalId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var tunerHost in _tunerHostManager.TunerHosts)
+            {
+                var tunerChannels = await tunerHost.GetChannels(true, cancellationToken).ConfigureAwait(false);
+                foreach (var info in tunerChannels)
+                {
+                    if (!string.IsNullOrEmpty(info.Id) && !string.IsNullOrWhiteSpace(info.ChannelGroup))
+                    {
+                        groupByExternalId[info.Id] = info.ChannelGroup.Trim();
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Could not read channel groups from the Live TV tuners");
+            return null;
+        }
+
+        var result = new Dictionary<Guid, string>();
+        foreach (var channel in channels)
+        {
+            if (!string.IsNullOrEmpty(channel.ExternalId)
+                && groupByExternalId.TryGetValue(channel.ExternalId, out var group))
+            {
+                result[channel.Id] = group;
+            }
+        }
+
+        return result;
+    }
+
+    private static HashSet<string> CleanGroups(IEnumerable<string>? groups)
+        => (groups ?? Enumerable.Empty<string>())
+            .Where(g => !string.IsNullOrWhiteSpace(g))
+            .Select(g => g.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Tests whether a channel matches a rule: by its tuner channel group for
+    /// channel-group rules, and by keywords against the channel name and, if
+    /// the rule asks for it, the names of its upcoming programs.
     /// </summary>
     /// <param name="channel">The channel to test.</param>
     /// <param name="rule">The rule to test against.</param>
     /// <param name="programNames">Upcoming program names by channel id, from <see cref="GetUpcomingProgramNames"/>.</param>
+    /// <param name="sourceGroups">Tuner channel group by channel id, from <see cref="GetChannelSourceGroupsAsync"/>.</param>
     /// <returns><c>true</c> if the channel matches.</returns>
-    public static bool IsMatch(LiveTvChannel channel, ChannelGroupRule rule, IReadOnlyDictionary<Guid, string[]> programNames)
+    public static bool IsMatch(
+        LiveTvChannel channel,
+        ChannelGroupRule rule,
+        IReadOnlyDictionary<Guid, string[]> programNames,
+        IReadOnlyDictionary<Guid, string> sourceGroups)
     {
-        return rule.Enabled && FindMatch(channel, rule, programNames) is not null;
+        return rule.Enabled && FindMatch(channel, rule, programNames, sourceGroups) is not null;
     }
 
     /// <summary>
@@ -120,9 +232,28 @@ public class ChannelGroupEngine
     /// <param name="channel">The channel to test.</param>
     /// <param name="rule">The rule to test against.</param>
     /// <param name="programNames">Upcoming program names by channel id, from <see cref="GetUpcomingProgramNames"/>.</param>
+    /// <param name="sourceGroups">Tuner channel group by channel id, from <see cref="GetChannelSourceGroupsAsync"/>.</param>
     /// <returns>The match reason, or <c>null</c> if the channel does not match.</returns>
-    public static MatchReason? FindMatch(LiveTvChannel channel, ChannelGroupRule rule, IReadOnlyDictionary<Guid, string[]> programNames)
+    public static MatchReason? FindMatch(
+        LiveTvChannel channel,
+        ChannelGroupRule rule,
+        IReadOnlyDictionary<Guid, string[]> programNames,
+        IReadOnlyDictionary<Guid, string> sourceGroups)
     {
+        if (rule.MatchMode == MatchMode.ChannelGroups)
+        {
+            if (!sourceGroups.TryGetValue(channel.Id, out var sourceGroup)
+                || !CleanGroups(rule.ChannelGroups).Contains(sourceGroup))
+            {
+                return null;
+            }
+
+            if (!CleanGroups(rule.GetFilteredChannelGroups()).Contains(sourceGroup))
+            {
+                return new MatchReason("group", sourceGroup, sourceGroup);
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(rule.Keywords))
         {
             return null;
@@ -151,15 +282,16 @@ public class ChannelGroupEngine
     }
 
     /// <summary>
-    /// Lists the keywords of a Regex-mode rule that are not valid regular
-    /// expressions (and are therefore silently skipped when matching).
+    /// Lists the keywords of a rule matching by regular expression that are
+    /// not valid regular expressions (and are therefore silently skipped when
+    /// matching).
     /// </summary>
     /// <param name="rule">The rule to check.</param>
     /// <returns>The invalid patterns; empty for other match modes.</returns>
     public static IReadOnlyList<string> GetInvalidPatterns(ChannelGroupRule rule)
     {
         var invalid = new List<string>();
-        if (rule.MatchMode != MatchMode.Regex)
+        if (!UsesKeywords(rule) || GetKeywordMatchMode(rule) != MatchMode.Regex)
         {
             return invalid;
         }
@@ -197,7 +329,7 @@ public class ChannelGroupEngine
 
             try
             {
-                var matched = rule.MatchMode switch
+                var matched = GetKeywordMatchMode(rule) switch
                 {
                     MatchMode.Contains => text.Contains(keyword, comparison),
                     MatchMode.WholeWord => Regex.IsMatch(text, $@"\b{Regex.Escape(keyword)}\b", regexOptions),
@@ -228,17 +360,19 @@ public class ChannelGroupEngine
     /// <param name="channels">The channels to test.</param>
     /// <param name="rules">The rules to test.</param>
     /// <param name="programNames">Upcoming program names by channel id, from <see cref="GetUpcomingProgramNames"/>.</param>
+    /// <param name="sourceGroups">Tuner channel group by channel id, from <see cref="GetChannelSourceGroupsAsync"/>.</param>
     /// <returns>A map of rule id to the list of matching channels.</returns>
     public static IReadOnlyDictionary<string, List<LiveTvChannel>> PreviewMatches(
         IReadOnlyList<LiveTvChannel> channels,
         IReadOnlyList<ChannelGroupRule> rules,
-        IReadOnlyDictionary<Guid, string[]> programNames)
+        IReadOnlyDictionary<Guid, string[]> programNames,
+        IReadOnlyDictionary<Guid, string> sourceGroups)
     {
         var result = new Dictionary<string, List<LiveTvChannel>>();
 
         foreach (var rule in rules)
         {
-            result[rule.Id] = channels.Where(c => IsMatch(c, rule, programNames)).ToList();
+            result[rule.Id] = channels.Where(c => IsMatch(c, rule, programNames, sourceGroups)).ToList();
         }
 
         return result;
@@ -272,13 +406,24 @@ public class ChannelGroupEngine
         var rules = config.Groups.Where(r => r.Enabled && !string.IsNullOrWhiteSpace(r.Name)).ToList();
         var channels = GetAllChannels();
         var programNames = GetUpcomingProgramNames(rules);
-        var state = LoadState();
-        var newState = new PluginState();
         var result = new ApplyResult
         {
             GroupsProcessed = rules.Count,
             ChannelsScanned = channels.Count
         };
+
+        var sourceGroups = await GetChannelSourceGroupsAsync(channels, rules, cancellationToken).ConfigureAwait(false);
+        if (sourceGroups is null)
+        {
+            // Without groups, group-filtered rules would match nothing and this
+            // pass would strip their tags and empty their collections. Leave
+            // everything as it is until the tuners can be read again.
+            _logger.LogWarning("Skipping this apply pass: channel groups are unavailable");
+            return result;
+        }
+
+        var state = LoadState();
+        var newState = new PluginState();
 
         var groupChannelIds = rules.ToDictionary(r => r.Id, _ => new List<Guid>());
         var total = Math.Max(channels.Count, 1);
@@ -291,7 +436,7 @@ public class ChannelGroupEngine
             var matchedGroupNames = new List<string>();
             foreach (var rule in rules)
             {
-                if (IsMatch(channel, rule, programNames))
+                if (IsMatch(channel, rule, programNames, sourceGroups))
                 {
                     matchedGroupNames.Add(rule.Name);
                     groupChannelIds[rule.Id].Add(channel.Id);

@@ -18,6 +18,9 @@ a Collection of the same name that you can browse from any Jellyfin client.
 - **Program matching** (optional, per group) — also match on the names of
   upcoming guide programs, so a channel joins a group while it has a matching
   show or game scheduled.
+- **Channel groups** — build a group straight from your tuner's own channel
+  groups (an M3U playlist's `group-title`, such as Dispatcharr's channel
+  groups), combining several and optionally narrowing them down by keyword.
 - **Stays up to date automatically** — re-applies shortly after channels are
   added or updated (e.g. after a tuner or M3U rescan) or, for groups that match
   programs, after a guide refresh, and every 6 hours as a scheduled task.
@@ -48,6 +51,17 @@ names in the guide** on a group to also match the titles of programs airing now
 or coming up within the lookahead window — e.g. an **NFL** group picks up CBS
 during the week before a Sunday game, then drops it again once the game is no
 longer in the guide window. Channel numbers are never matched.
+
+Set a group's **Match mode** to **Channel groups** to build it from the groups
+your tuner's M3U playlist puts channels in (`group-title`; with Dispatcharr,
+these are its channel groups) instead of from keywords. Every channel in the
+ticked groups joins. Tick **filter** next to a group to take only its channels
+that also match keywords, with the usual match modes and program matching;
+the other ticked groups are taken whole. For example, an NHL group can take the
+NHL team and MSG groups whole and filter a mixed ESPN+ group down to NHL games.
+Groups come from the tuner's channel list as of the last guide refresh.
+
+The plugin also adds itself to the dashboard's sidebar, under **Plugins**.
 
 ### Settings
 

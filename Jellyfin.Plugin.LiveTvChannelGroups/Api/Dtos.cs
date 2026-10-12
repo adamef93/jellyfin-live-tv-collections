@@ -25,8 +25,8 @@ public record GroupPreview(string RuleId, string GroupName, IReadOnlyList<Channe
 /// <param name="Id">The channel's item id.</param>
 /// <param name="Name">The channel's name.</param>
 /// <param name="Number">The channel's number, if any.</param>
-/// <param name="MatchedOn">"name" or "program".</param>
-/// <param name="MatchedText">The channel or program name the keyword matched.</param>
+/// <param name="MatchedOn">"name", "program" or "group".</param>
+/// <param name="MatchedText">The channel name, program name or group that matched.</param>
 /// <param name="Keyword">The keyword or pattern that matched.</param>
 public record ChannelMatch(Guid Id, string Name, string? Number, string MatchedOn, string MatchedText, string Keyword);
 
@@ -37,3 +37,10 @@ public record ChannelMatch(Guid Id, string Name, string? Number, string MatchedO
 /// <param name="Matches">The channels that matched, with reasons.</param>
 /// <param name="InvalidPatterns">Regex patterns that failed to parse and were skipped.</param>
 public record RulePreview(int ChannelsScanned, IReadOnlyList<ChannelMatch> Matches, IReadOnlyList<string> InvalidPatterns);
+
+/// <summary>
+/// A tuner channel group (an M3U playlist's <c>group-title</c>).
+/// </summary>
+/// <param name="Name">The group's name.</param>
+/// <param name="ChannelCount">How many Live TV channels are in it.</param>
+public record SourceGroupSummary(string Name, int ChannelCount);

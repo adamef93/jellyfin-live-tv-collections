@@ -127,9 +127,133 @@
                     MatchMode: "Contains",
                     CaseSensitive: false,
                     MatchPrograms: false,
+                    ChannelGroups: [],
+                    FilteredChannelGroups: [],
+                    FilterByKeywords: false,
+                    KeywordMatchMode: "Contains",
                     Enabled: true,
                     CollectionId: "00000000-0000-0000-0000-000000000000"
                 };
+            }
+
+            // The tuners' channel groups (M3U group-title, e.g. Dispatcharr's
+            // channel groups), loaded alongside the configuration.
+            var sourceGroups = [];
+            var sourceGroupsError = false;
+
+            // One checkbox per tuner channel group. Built with DOM calls so group
+            // names need no escaping. Groups saved on the rule but no longer
+            // offered by the tuner stay listed, so saving does not drop them.
+            function buildChannelGroupsPicker(host, group) {
+                var selected = {};
+                (group.ChannelGroups || []).forEach(function (n) { selected[n.toLowerCase()] = true; });
+                // Configs saved before per-group filtering filtered every group.
+                var filtered = {};
+                var filteredNames = (group.FilteredChannelGroups && group.FilteredChannelGroups.length) || !group.FilterByKeywords
+                    ? (group.FilteredChannelGroups || [])
+                    : (group.ChannelGroups || []);
+                filteredNames.forEach(function (n) { filtered[n.toLowerCase()] = true; });
+
+                if (sourceGroupsError) {
+                    var err = document.createElement("p");
+                    err.style.color = "#f66";
+                    err.textContent = "Could not load channel groups from the Live TV tuners.";
+                    host.appendChild(err);
+                }
+
+                var entries = sourceGroups.map(function (g) { return { Name: g.Name, ChannelCount: g.ChannelCount }; });
+                var known = {};
+                entries.forEach(function (e) { known[e.Name.toLowerCase()] = true; });
+                (group.ChannelGroups || []).forEach(function (name) {
+                    if (!known[name.toLowerCase()]) {
+                        known[name.toLowerCase()] = true;
+                        entries.push({ Name: name, ChannelCount: null });
+                    }
+                });
+
+                if (!entries.length) {
+                    if (!sourceGroupsError) {
+                        var none = document.createElement("p");
+                        none.style.opacity = "0.6";
+                        none.textContent = "Your Live TV tuners don't report any channel groups.";
+                        host.appendChild(none);
+                    }
+                    return;
+                }
+
+                var list = document.createElement("div");
+                list.style.cssText = "max-height:18em; overflow-y:auto; padding:0.5em 0.75em; margin:0.5em 0; " +
+                    "border:1px solid rgba(255,255,255,0.12); border-radius:0.3em; display:grid; " +
+                    "grid-template-columns:repeat(auto-fill, minmax(20em, 1fr)); gap:0.2em 1.5em;";
+
+                entries.forEach(function (e) {
+                    var item = document.createElement("div");
+                    item.style.cssText = "display:flex; align-items:center; gap:0.75em; min-width:0;";
+
+                    var label = document.createElement("label");
+                    label.style.cssText = "flex:1 1 auto; display:flex; align-items:center; gap:0.5em; padding:0.2em 0; " +
+                        "cursor:pointer; overflow:hidden; white-space:nowrap; min-width:0;";
+                    var chk = document.createElement("input");
+                    chk.type = "checkbox";
+                    chk.className = "fldChannelGroup";
+                    chk.value = e.Name;
+                    chk.checked = !!selected[e.Name.toLowerCase()];
+                    var text = document.createElement("span");
+                    text.style.cssText = "overflow:hidden; text-overflow:ellipsis;";
+                    text.textContent = e.Name;
+                    var count = document.createElement("span");
+                    count.style.opacity = "0.55";
+                    count.textContent = e.ChannelCount === null ? " (no channels right now)" : " (" + e.ChannelCount + ")";
+                    text.appendChild(count);
+                    label.appendChild(chk);
+                    label.appendChild(text);
+
+                    var filterLabel = document.createElement("label");
+                    filterLabel.style.cssText = "flex:none; display:flex; align-items:center; gap:0.3em; cursor:pointer; font-size:0.9em;";
+                    filterLabel.title = "Only take this group's channels that match the keywords below";
+                    var filterChk = document.createElement("input");
+                    filterChk.type = "checkbox";
+                    filterChk.className = "fldFilterChannelGroup";
+                    filterChk.value = e.Name;
+                    filterChk.checked = chk.checked && !!filtered[e.Name.toLowerCase()];
+                    var filterText = document.createElement("span");
+                    filterText.textContent = "filter";
+                    filterLabel.appendChild(filterChk);
+                    filterLabel.appendChild(filterText);
+
+                    function syncFilter() {
+                        if (!chk.checked) { filterChk.checked = false; }
+                        filterChk.disabled = !chk.checked;
+                        filterLabel.style.opacity = chk.checked ? "1" : "0.35";
+                    }
+                    chk.addEventListener("change", syncFilter);
+                    syncFilter();
+
+                    item.appendChild(label);
+                    item.appendChild(filterLabel);
+                    list.appendChild(item);
+                });
+
+                host.appendChild(list);
+            }
+
+            function keywordModeOptions(selectedMode) {
+                return [["Contains", "Contains"], ["WholeWord", "Whole word"], ["Regex", "Regular expression"]]
+                    .map(function (o) {
+                        return '<option value="' + o[0] + '"' + (selectedMode === o[0] ? " selected" : "") + '>' + o[1] + '</option>';
+                    }).join("");
+            }
+
+            // Channel-group rules show the group picker, and the keyword fields only
+            // once a group is set to filter by keyword; keyword rules show only the
+            // keyword fields.
+            function updateRowVisibility(row) {
+                var byGroup = row.querySelector(".fldMatchMode").value === "ChannelGroups";
+                var filter = Array.prototype.some.call(row.querySelectorAll(".fldFilterChannelGroup"),
+                    function (c) { return c.checked; });
+                row.querySelector(".channelGroupSection").style.display = byGroup ? "" : "none";
+                row.querySelector(".keywordModeContainer").style.display = byGroup ? "" : "none";
+                row.querySelector(".keywordSection").style.display = (!byGroup || filter) ? "" : "none";
             }
 
             function escapeHtml(value) {
@@ -169,6 +293,9 @@
                     row.style.marginBottom = "1em";
                     row.dataset.groupId = group.Id;
 
+                    var isGroupMode = group.MatchMode === "ChannelGroups";
+                    var keywordMode = isGroupMode ? (group.KeywordMatchMode || "Contains") : group.MatchMode;
+
                     row.innerHTML =
                         '<div style="display:flex; flex-wrap:wrap; gap:2em;">' +
                         '<div style="flex:1 1 26em; min-width:0;">' +
@@ -183,17 +310,28 @@
                         '  <label class="inputLabel inputLabelUnfocused">Name</label>' +
                         '  <input type="text" class="fldName emby-input" value="' + escapeHtml(group.Name) + '" placeholder="e.g. Hockey" />' +
                         '</div>' +
-                        '<div class="inputContainer">' +
-                        '  <label class="inputLabel inputLabelUnfocused">Keywords (comma-separated)</label>' +
-                        '  <input type="text" class="fldKeywords emby-input" value="' + escapeHtml(group.Keywords) + '" placeholder="e.g. hockey, nhl, sportsnet" />' +
-                        '</div>' +
                         '<div class="selectContainer">' +
                         '  <label class="selectLabel">Match mode</label>' +
                         '  <select class="fldMatchMode emby-select">' +
-                        '    <option value="Contains"' + (group.MatchMode === "Contains" ? " selected" : "") + '>Contains</option>' +
-                        '    <option value="WholeWord"' + (group.MatchMode === "WholeWord" ? " selected" : "") + '>Whole word</option>' +
-                        '    <option value="Regex"' + (group.MatchMode === "Regex" ? " selected" : "") + '>Regular expression</option>' +
+                        keywordModeOptions(isGroupMode ? "" : group.MatchMode) +
+                        '    <option value="ChannelGroups"' + (isGroupMode ? " selected" : "") + '>Channel groups</option>' +
                         '  </select>' +
+                        '</div>' +
+                        '<div class="channelGroupSection">' +
+                        '  <label class="inputLabel">Channel groups</label>' +
+                        '  <div class="fieldDescription">Every channel in the ticked groups joins. Tick “filter” next to a ' +
+                        '    group to take only its channels that match the keywords below. These are the groups from your ' +
+                        '    tuner’s M3U playlist (group-title), e.g. Dispatcharr’s channel groups.</div>' +
+                        '  <div class="srcGroupsHost"></div>' +
+                        '</div>' +
+                        '<div class="keywordSection">' +
+                        '<div class="selectContainer keywordModeContainer">' +
+                        '  <label class="selectLabel">Keyword match mode</label>' +
+                        '  <select class="fldKeywordMatchMode emby-select">' + keywordModeOptions(keywordMode) + '</select>' +
+                        '</div>' +
+                        '<div class="inputContainer">' +
+                        '  <label class="inputLabel inputLabelUnfocused">Keywords (comma-separated)</label>' +
+                        '  <input type="text" class="fldKeywords emby-input" value="' + escapeHtml(group.Keywords) + '" placeholder="e.g. hockey, nhl, sportsnet" />' +
                         '</div>' +
                         '<label class="checkboxContainer">' +
                         '  <input type="checkbox" class="fldCaseSensitive" ' + (group.CaseSensitive ? "checked" : "") + ' />' +
@@ -203,13 +341,33 @@
                         '  <input type="checkbox" class="fldMatchPrograms" ' + (group.MatchPrograms ? "checked" : "") + ' />' +
                         '  <span>Also match channels with upcoming games or programs matching these keywords (looks ahead <span class="lblLookaheadDays">7 days</span>; change under Program lookahead in settings above)</span>' +
                         '</label>' +
+                        '</div>' +
                         '<button type="button" class="raised button-alt btnPreviewGroup"><span>Preview matches</span></button> ' +
                         '<button type="button" class="raised button-alt btnRemoveGroup"><span>Remove group</span></button>' +
                         '</div>' +
                         '<div style="flex:1 1 22em; min-width:0; border-left:1px solid rgba(255,255,255,0.12); padding-left:2em;">' +
-                        '  <div class="groupPreview"><span style="opacity:0.6;">Click \u201cPreview matches\u201d to see which channels this group would include.</span></div>' +
+                        '  <div class="groupPreview"><span style="opacity:0.6;">Click “Preview matches” to see which channels this group would include.</span></div>' +
                         '</div>' +
                         '</div>';
+
+                    buildChannelGroupsPicker(row.querySelector(".srcGroupsHost"), group);
+
+                    // Switching a keyword rule to channel groups keeps its keywords
+                    // and their match mode for the optional filter.
+                    var modeSelect = row.querySelector(".fldMatchMode");
+                    var lastKeywordMode = keywordMode;
+                    modeSelect.addEventListener("change", function () {
+                        if (modeSelect.value === "ChannelGroups") {
+                            row.querySelector(".fldKeywordMatchMode").value = lastKeywordMode;
+                        } else {
+                            lastKeywordMode = modeSelect.value;
+                        }
+                        updateRowVisibility(row);
+                    });
+                    row.querySelector(".srcGroupsHost").addEventListener("change", function () {
+                        updateRowVisibility(row);
+                    });
+                    updateRowVisibility(row);
 
                     row.querySelector(".btnPreviewGroup").addEventListener("click", function () {
                         previewGroup(row);
@@ -364,6 +522,8 @@
                             tag.style.cssText = "opacity:0.55; font-size:0.85em;";
                             tag.textContent = " \u00b7 guide";
                             item.appendChild(tag);
+                        } else if (m.MatchedOn === "group") {
+                            item.title = "In channel group: " + m.MatchedText;
                         }
                         list.appendChild(item);
                     });
@@ -375,13 +535,25 @@
             }
 
             function readGroupRow(row) {
+                var channelGroups = [], filteredGroups = [];
+                row.querySelectorAll(".fldChannelGroup").forEach(function (chk) {
+                    if (chk.checked) { channelGroups.push(chk.value); }
+                });
+                row.querySelectorAll(".fldFilterChannelGroup").forEach(function (chk) {
+                    if (chk.checked) { filteredGroups.push(chk.value); }
+                });
+                var mode = row.querySelector(".fldMatchMode").value;
                 return {
                     Id: row.dataset.groupId,
                     Name: row.querySelector(".fldName").value,
                     Keywords: row.querySelector(".fldKeywords").value,
-                    MatchMode: row.querySelector(".fldMatchMode").value,
+                    MatchMode: mode,
                     CaseSensitive: row.querySelector(".fldCaseSensitive").checked,
                     MatchPrograms: row.querySelector(".fldMatchPrograms").checked,
+                    ChannelGroups: channelGroups,
+                    FilteredChannelGroups: filteredGroups,
+                    FilterByKeywords: false,
+                    KeywordMatchMode: mode === "ChannelGroups" ? row.querySelector(".fldKeywordMatchMode").value : mode,
                     Enabled: row.querySelector(".fldEnabled").checked,
                     CollectionId: row.dataset.collectionId || "00000000-0000-0000-0000-000000000000"
                 };
@@ -404,7 +576,21 @@
                     return;
                 }
                 if (typeof Dashboard !== "undefined") { Dashboard.showLoadingMsg(); }
-                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                var groupsLoaded = ApiClient.ajax({
+                    type: "GET",
+                    url: ApiClient.getUrl("LiveTvChannelGroups/SourceGroups"),
+                    dataType: "json"
+                }).then(function (groups) {
+                    sourceGroups = groups || [];
+                    sourceGroupsError = false;
+                }).catch(function (err) {
+                    console.error("LiveTvChannelGroups: loading channel groups failed", err);
+                    sourceGroups = [];
+                    sourceGroupsError = true;
+                });
+                groupsLoaded.then(function () {
+                    return ApiClient.getPluginConfiguration(pluginId);
+                }).then(function (config) {
                     page.querySelector("#chkCreateCollections").checked = !!config.CreateCollections;
                     page.querySelector("#chkRemoveStaleTags").checked = !!config.RemoveStaleTags;
                     page.querySelector("#chkAutoApply").checked = !!config.AutoApplyOnChannelChange;
