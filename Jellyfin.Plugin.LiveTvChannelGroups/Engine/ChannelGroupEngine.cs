@@ -32,6 +32,9 @@ public record MatchReason(string Source, string Text, string Keyword);
 public class ChannelGroupEngine
 {
     private readonly ILibraryManager _libraryManager;
+    // Premiere dates stamped on collection channels run from here, a day per channel.
+    private static readonly DateTime NameOrderEpoch = new(1900, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
     private readonly ICollectionManager _collectionManager;
     private readonly ITunerHostManager _tunerHostManager;
     private readonly LeagueScheduleService _leagueSchedules;
@@ -588,13 +591,12 @@ public class ChannelGroupEngine
                 }
             }
 
-            // Jellyfin builds a channel's default sort name from its channel number
-            // plus its name; force name-only so collections sort alphabetically.
-            if (config.CreateCollections
-                && matchedGroupNames.Count > 0
-                && !string.Equals(channel.ForcedSortName, channel.Name, StringComparison.Ordinal))
+            // Earlier versions forced a name-only sort name on grouped channels, which
+            // moved them out of channel number order in the guide. Restore Jellyfin's
+            // default (channel number plus name).
+            if (string.Equals(channel.ForcedSortName, channel.Name, StringComparison.Ordinal))
             {
-                channel.ForcedSortName = channel.Name;
+                channel.ForcedSortName = null;
                 changed = true;
             }
 
@@ -617,6 +619,11 @@ public class ChannelGroupEngine
         }
 
         SaveState(newState);
+
+        var collectionChannelIds = config.CreateCollections
+            ? groupChannelIds.Values.SelectMany(ids => ids).ToHashSet()
+            : new HashSet<Guid>();
+        result.ChannelsUpdated += await UpdateNameOrderAsync(channels, collectionChannelIds, cancellationToken).ConfigureAwait(false);
 
         if (config.CreateCollections)
         {
@@ -694,20 +701,65 @@ public class ChannelGroupEngine
         return true;
     }
 
-    // Channels have no premiere date, so the default PremiereDate ordering is arbitrary.
-    // Channel sort names are forced to the plain name in ApplyInternalAsync.
+    // A channel's sort name starts with its channel number, which the guide relies on,
+    // so collections order by premiere date instead. UpdateNameOrderAsync stamps
+    // channels in collections with dates that follow their names.
     private async Task<bool> EnsureSortNameOrderAsync(BoxSet boxSet, CancellationToken cancellationToken)
     {
-        if (string.Equals(boxSet.DisplayOrder, "SortName", StringComparison.Ordinal))
+        if (string.Equals(boxSet.DisplayOrder, "PremiereDate", StringComparison.Ordinal))
         {
             return false;
         }
 
-        boxSet.DisplayOrder = "SortName";
+        boxSet.DisplayOrder = "PremiereDate";
         await _libraryManager
             .UpdateItemAsync(boxSet, boxSet.GetParent(), ItemUpdateType.MetadataEdit, cancellationToken)
             .ConfigureAwait(false);
         return true;
+    }
+
+    // Channels have no premiere date of their own. Give each channel in a collection
+    // one, a day apart in name order, so collections sorted by premiere date come out
+    // alphabetical. Dates stamped by an earlier pass are cleared from channels that
+    // have left every collection. Returns how many channels were updated.
+    private async Task<int> UpdateNameOrderAsync(
+        IReadOnlyList<LiveTvChannel> channels,
+        HashSet<Guid> collectionChannelIds,
+        CancellationToken cancellationToken)
+    {
+        var dates = channels
+            .Where(c => collectionChannelIds.Contains(c.Id))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(c => c.Number, StringComparer.Ordinal)
+            .Select((c, rank) => (Channel: c, Date: NameOrderEpoch.AddDays(rank)))
+            .ToDictionary(x => x.Channel.Id, x => x.Date);
+
+        var updated = 0;
+        foreach (var channel in channels)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            DateTime? wanted = dates.TryGetValue(channel.Id, out var date) ? date : null;
+            var current = channel.PremiereDate;
+            if (wanted is null && (current is null || current.Value.Year >= NameOrderEpoch.Year + 100))
+            {
+                // Not in a collection and not ours.
+                continue;
+            }
+
+            if (wanted == current)
+            {
+                continue;
+            }
+
+            channel.PremiereDate = wanted;
+            await _libraryManager
+                .UpdateItemAsync(channel, channel.GetParent(), ItemUpdateType.MetadataEdit, cancellationToken)
+                .ConfigureAwait(false);
+            updated++;
+        }
+
+        return updated;
     }
 
     /// <summary>
