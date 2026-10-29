@@ -77,9 +77,10 @@ channel or program then matches when its title names both teams of a game on
 one of their schedules (`Georgia vs. Alabama`, `College Football : Georgia at
 Alabama`, `NHL.TV: Flyers @ Bruins`) and the guide has it starting within 90
 minutes of that game's scheduled start. The time check is what tells a football
-game from the same two schools' volleyball match. Schedules come from ESPN's
-public scoreboard and are cached for an hour; if they can't be fetched, the
-plugin skips that apply pass rather than emptying the group.
+game from the same two schools' volleyball match. NFL RedZone, which names no
+game, matches the NFL while one of its games kicks off during it. Schedules
+come from ESPN's public scoreboard and are cached for an hour; if they can't be
+fetched, the plugin skips that apply pass rather than emptying the group.
 
 ![A League schedule group matching tonight's NFL game across channels](docs/screenshots/league-schedule.png)
 

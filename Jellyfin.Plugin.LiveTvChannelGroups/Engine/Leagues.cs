@@ -11,7 +11,25 @@ namespace Jellyfin.Plugin.LiveTvChannelGroups.Engine;
 /// <param name="Name">Display name.</param>
 /// <param name="SportPath">ESPN's sport/league path, e.g. "hockey/nhl".</param>
 /// <param name="ScoreboardGroups">ESPN scoreboard <c>groups</c> values to fetch, one request each; empty for one request without it.</param>
-public record League(string Id, string Name, string SportPath, IReadOnlyList<string> ScoreboardGroups);
+/// <param name="Shows">
+/// Whip-around shows that cover the league's games without naming one, e.g.
+/// RedZone. A title containing one (compared like team names, ignoring case
+/// and punctuation) counts as the league while one of its games is on.
+/// </param>
+public record League(string Id, string Name, string SportPath, IReadOnlyList<string> ScoreboardGroups, IReadOnlyList<string> Shows)
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="League"/> record without shows.
+    /// </summary>
+    /// <param name="id">Stable id stored in rules.</param>
+    /// <param name="name">Display name.</param>
+    /// <param name="sportPath">ESPN's sport/league path.</param>
+    /// <param name="scoreboardGroups">ESPN scoreboard <c>groups</c> values to fetch.</param>
+    public League(string id, string name, string sportPath, IReadOnlyList<string> scoreboardGroups)
+        : this(id, name, sportPath, scoreboardGroups, Array.Empty<string>())
+    {
+    }
+}
 
 /// <summary>
 /// The league presets offered by the League match mode.
@@ -23,7 +41,7 @@ public static class Leagues
     /// </summary>
     public static IReadOnlyList<League> All { get; } = new[]
     {
-        new League("nfl", "NFL", "football/nfl", Array.Empty<string>()),
+        new League("nfl", "NFL", "football/nfl", Array.Empty<string>(), new[] { "RedZone", "Red Zone" }),
 
         // 80 = FBS, 81 = FCS; without groups ESPN only lists featured games.
         new League("college-football", "College Football", "football/college-football", new[] { "80", "81" }),

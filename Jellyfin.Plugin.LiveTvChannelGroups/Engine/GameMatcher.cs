@@ -128,6 +128,19 @@ public sealed class GameMatcher
     }
 
     /// <summary>
+    /// Finds which of a league's shows (see <see cref="League.Shows"/>) a
+    /// title names, as whole words.
+    /// </summary>
+    /// <param name="title">A channel or program title.</param>
+    /// <param name="shows">The show titles.</param>
+    /// <returns>The show named, or <c>null</c>.</returns>
+    public static string? FindShow(string? title, IEnumerable<string> shows)
+    {
+        var padded = " " + Normalize(title) + " ";
+        return shows.FirstOrDefault(s => padded.Contains(" " + Normalize(s) + " ", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// Gets whether a guide program starting at the given time could be the game.
     /// </summary>
     /// <param name="game">The game.</param>

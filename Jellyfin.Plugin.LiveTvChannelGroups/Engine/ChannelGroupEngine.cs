@@ -321,6 +321,8 @@ public class ChannelGroupEngine
     // upcoming program names a scheduled game. Two schools can meet in several
     // sports the same weekend under identical titles, so a title only counts
     // when the guide has it starting near the game's scheduled start.
+    // Whip-around shows (NFL RedZone) name no game, so they count while one of
+    // the league's games starts during them.
     private static MatchReason? FindGameMatch(LiveTvChannel channel, ChannelGroupRule rule, GuideProgram[] programs, MatchContext context)
     {
         var leagues = Engine.Leagues.Resolve(rule.Leagues);
@@ -329,20 +331,43 @@ public class ChannelGroupEngine
             return null;
         }
 
+        // With no guide program to time a title by, settle for the game being
+        // within the window.
+        bool InWindow(ScheduledGame game)
+            => game.StartUtc >= context.NowUtc.AddHours(-6) && game.StartUtc <= Max(context.LookaheadEndUtc, context.NowUtc.AddDays(1));
+
         var matcher = context.GetMatcher(leagues);
         var name = channel.Name ?? string.Empty;
         foreach (var game in matcher.FindGames(name))
         {
             // Event channels (e.g. ESPN+) carry the event as their program, so
-            // time it by that. With no such program, settle for the game being
-            // within the window.
+            // time it by that.
             var timed = programs.Where(x => matcher.FindGames(x.Name).Contains(game)).ToList();
             var onTime = timed.Count > 0
                 ? timed.Any(x => GameMatcher.StartsNear(game, x.StartUtc))
-                : game.StartUtc >= context.NowUtc.AddHours(-6) && game.StartUtc <= Max(context.LookaheadEndUtc, context.NowUtc.AddDays(1));
+                : InWindow(game);
             if (onTime)
             {
                 return new MatchReason("game", name, game.Label);
+            }
+        }
+
+        foreach (var league in leagues.Where(l => l.Shows.Count > 0))
+        {
+            var show = GameMatcher.FindShow(name, league.Shows);
+            if (show is null)
+            {
+                continue;
+            }
+
+            var games = context.Games.Where(g => g.LeagueId == league.Id).ToList();
+            var timed = programs.Where(x => GameMatcher.FindShow(x.Name, league.Shows) is not null).ToList();
+            var onTime = timed.Count > 0
+                ? timed.Any(x => games.Any(g => StartsDuring(g, x)))
+                : games.Any(InWindow);
+            if (onTime)
+            {
+                return new MatchReason("game", name, league.Name + " " + show);
             }
         }
 
@@ -355,11 +380,25 @@ public class ChannelGroupEngine
                 {
                     return new MatchReason("game", program.Name, game.Label);
                 }
+
+                foreach (var league in leagues.Where(l => l.Shows.Count > 0))
+                {
+                    var show = GameMatcher.FindShow(program.Name, league.Shows);
+                    if (show is not null && context.Games.Any(g => g.LeagueId == league.Id && StartsDuring(g, program)))
+                    {
+                        return new MatchReason("game", program.Name, league.Name + " " + show);
+                    }
+                }
             }
         }
 
         return null;
     }
+
+    // Whether a game kicks off while a program is on, allowing for the
+    // program starting a little after the game.
+    private static bool StartsDuring(ScheduledGame game, GuideProgram program)
+        => game.StartUtc >= program.StartUtc - GameMatcher.StartTolerance && game.StartUtc <= program.EndUtc;
 
     /// <summary>
     /// Lists the keywords of a rule matching by regular expression that are
